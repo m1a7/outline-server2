@@ -52,11 +52,9 @@ fi
 # Firewall setup
 print_section "Configuring firewall"
 log_info "Setting up firewall rules..."
-#ufw allow 22
-#ufw allow 443
-#ufw allow 8443
-ufw default allow incoming
-ufw default allow outgoing
+ufw allow 22
+ufw allow 443
+ufw allow 8443
 ufw --force enable
 
 # Obfuscation setup
@@ -92,7 +90,8 @@ docker run -d --name shadowbox -p 443:443 -p 8443:8443 \
   quay.io/outline/shadowbox:stable
 
 if ! docker ps | grep -q shadowbox; then
-  log_error "Shadowbox container failed to start."
+  log_error "Shadowbox container failed to start. Checking logs..."
+  docker logs shadowbox
   exit 1
 fi
 
@@ -133,6 +132,9 @@ if [[ -z "\$OBFS_TEST" ]]; then
 else
   log_info "Obfuscation is working correctly."
 fi
+
+log_info "Checking Shadowbox logs for issues..."
+docker logs shadowbox || log_error "Unable to fetch Shadowbox logs."
 EOF
 chmod +x /opt/vpn-setup-test-commands.sh
 
