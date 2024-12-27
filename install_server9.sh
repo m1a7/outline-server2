@@ -58,7 +58,7 @@ echo -e "${GREEN}API ключ:${NC} ${BLUE}${SB_API_PREFIX}${NC}"
 echo -e "${CYAN}Создание конфигурации...${NC}"
 cat <<EOF > "${STATE_DIR}/shadowbox_server_config.json"
 {
-  "portForNewAccessKeys": 8843,
+  "portForNewAccessKeys": 8443,
   "hostname": "$(curl -s https://icanhazip.com/)",
   "name": "Outline Server"
 }
@@ -69,17 +69,17 @@ echo -e "${GREEN}Файл конфигурации создан: ${BLUE}${STATE_
 docker rm -f shadowbox 2>/dev/null || true
 docker rm -f watchtower 2>/dev/null || true
 
-# Проверка и освобождение порта 8843
-echo -e "${CYAN}Проверка использования порта 8843...${NC}"
-if lsof -i :8843 &>/dev/null; then
-  echo -e "${RED}Порт 8843 уже используется!${NC}"
-  echo -e "${CYAN}Процессы, использующие порт 8843:${NC}"
-  lsof -i :8843
-  echo -e "${CYAN}Попытка завершить процессы, использующие порт 8843...${NC}"
-  lsof -i :8843 | awk 'NR>1 {print $2}' | xargs -r kill -9
-  echo -e "${GREEN}Процессы, использующие порт 8843, были завершены.${NC}"
+# Проверка и освобождение порта 8443
+echo -e "${CYAN}Проверка использования порта 8443...${NC}"
+if lsof -i :8443 &>/dev/null; then
+  echo -e "${RED}Порт 8443 уже используется!${NC}"
+  echo -e "${CYAN}Процессы, использующие порт 8443:${NC}"
+  lsof -i :8443
+  echo -e "${CYAN}Попытка завершить процессы, использующие порт 8443...${NC}"
+  lsof -i :8443 | awk 'NR>1 {print $2}' | xargs -r kill -9
+  echo -e "${GREEN}Процессы, использующие порт 8443, были завершены.${NC}"
 else
-  echo -e "${GREEN}Порт 8843 свободен.${NC}"
+  echo -e "${GREEN}Порт 8443 свободен.${NC}"
 fi
 
 # Запуск контейнера Shadowbox
@@ -88,7 +88,7 @@ docker run -d --name shadowbox --restart always \
   --net host \
   -v "${STATE_DIR}:${STATE_DIR}" \
   -e "SB_STATE_DIR=${STATE_DIR}" \
-  -e "SB_API_PORT=8843" \
+  -e "SB_API_PORT=8443" \
   -e "SB_API_PREFIX=${SB_API_PREFIX}" \
   -e "SB_CERTIFICATE_FILE=${CERT_FILE}" \
   -e "SB_PRIVATE_KEY_FILE=${CERT_KEY}" \
@@ -106,10 +106,10 @@ docker run -d --name watchtower --restart always \
 # Проверка состояния сервера
 echo -e "${CYAN}Начинаем тестирование...${NC}"
 
-# Логирование процессов, использующих порт 8843
-if lsof -i :8843 &>/dev/null; then
-  echo -e "${CYAN}Процессы, использующие порт 8843:${NC}"
-  lsof -i :8843
+# Логирование процессов, использующих порт 8443
+if lsof -i :8443 &>/dev/null; then
+  echo -e "${CYAN}Процессы, использующие порт 8443:${NC}"
+  lsof -i :8443
   echo -e "${RED}Ручная проверка требуется!${NC}"
 fi
 
@@ -145,7 +145,7 @@ fi
 
 # Проверка правил брандмауэра
 echo -e "${CYAN}Проверка правил брандмауэра...${NC}"
-if sudo ufw status | grep -q '8843'; then
+if sudo ufw status | grep -q '8443'; then
   echo -e "${GREEN}Порты для TCP/UDP разрешены.${NC}"
 else
   echo -e "${RED}Правила брандмауэра блокируют порты!${NC}"
@@ -169,7 +169,7 @@ fi
 echo -e "${CYAN}Тестирование завершено.${NC}"
 
 # Вывод конфигурации для Outline Manager
-API_URL="https://$(curl -s https://icanhazip.com/):8843/${SB_API_PREFIX}"
+API_URL="https://$(curl -s https://icanhazip.com/):8443/${SB_API_PREFIX}"
 CERT_SHA256=$(openssl x509 -in "${CERT_FILE}" -noout -sha256 -fingerprint | cut -d'=' -f2 | tr -d ':')
 CONFIG_STRING="{apiUrl:${API_URL},certSha256:${CERT_SHA256}}"
 echo -e "${CYAN}Конфигурация для Outline Manager:${NC}"
@@ -185,7 +185,7 @@ echo -e "${BLUE}Файл конфигурации: ${STATE_DIR}/shadowbox_server
 echo -e "${CYAN}Тестовые команды для проверки настроек:${NC}"
 echo -e "${BLUE}# Проверить доступность портов${NC}"
 echo "sudo ufw status"
-echo "nc -zv 127.0.0.1 8843"
+echo "nc -zv 127.0.0.1 8443"
 
 echo -e "${BLUE}# Проверить запущенные контейнеры${NC}"
 echo "docker ps"
