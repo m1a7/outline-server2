@@ -24,7 +24,7 @@ systemctl enable --now docker
 
 # Настройка брандмауэра
 echo -e "${CYAN}Настройка брандмауэра...${NC}"
-sudo ufw enable
+#sudo ufw enable
 ufw allow 443/tcp
 ufw allow 1024:65535/tcp
 ufw allow 1024:65535/udp
@@ -38,16 +38,24 @@ ufw default allow outgoing
 ufw --force enable
 
 # Установка правил для порта 443
-echo -e "${CYAN}Открытие порта 443 через брандмауэр...${NC}"
-ufw allow 443/tcp
-ufw reload
+# UFW
+if ! sudo ufw status | grep -q "443/tcp"; then
+  echo -e "${CYAN}Добавление правила для порта 443 через ufw...${NC}"
+  sudo ufw allow 443/tcp
+else
+  echo -e "${GREEN}Правило для порта 443 уже существует в ufw.${NC}"
+fi
+sudo ufw reload
+
 
 # Дополнительная настройка iptables
-echo -e "${CYAN}Настройка iptables...${NC}"
-iptables -I INPUT -p tcp --dport 443 -j ACCEPT
-iptables -I OUTPUT -p tcp --sport 443 -j ACCEPT
-iptables -I INPUT -p udp --dport 443 -j ACCEPT
-iptables -I OUTPUT -p udp --sport 443 -j ACCEPT
+# IPTables
+if ! sudo iptables -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null; then
+  echo -e "${CYAN}Добавление правила для порта 443 в iptables...${NC}"
+  sudo iptables -I INPUT -p tcp --dport 443 -j ACCEPT
+else
+  echo -e "${GREEN}Правило для порта 443 уже существует в iptables.${NC}"
+fi
 
 # Сохранение правил iptables
 iptables-save > /etc/iptables/rules.v4
