@@ -42,12 +42,23 @@ apt-get install -y -qq apt-transport-https ca-certificates curl \
 
 # Docker setup
 print_section "Setting up Docker"
-log_info "Configuring Docker service..."
-systemctl enable --now docker
-if ! docker --version >/dev/null 2>&1; then
-  log_error "Docker installation failed."
+log_info "Checking Docker installation..."
+if ! command -v docker >/dev/null 2>&1; then
+  log_error "Docker is not installed. Please install Docker before running this script."
   exit 1
 fi
+
+log_info "Configuring Docker service..."
+systemctl enable --now docker
+
+# Port check
+log_info "Checking required ports..."
+for port in 443 8443; do
+  if ss -tuln | grep -q ":$port"; then
+    log_warn "Port $port is already in use. Attempting to free it..."
+    fuser -k "$port/tcp" || log_warn "Could not free port $port."
+  fi
+done
 
 # Firewall setup
 print_section "Configuring firewall"
@@ -79,10 +90,23 @@ if [[ ! -f "$CERT_KEY" || ! -f "$CERT_CRT" ]]; then
   exit 1
 fi
 
+# Validate generated files
+log_info "Validating generated files..."
+if [[ ! -s "$CERT_KEY" ]]; then
+  log_error "Certificate key is empty or invalid."
+  exit 1
+fi
+if [[ ! -s "$CERT_CRT" ]]; then
+  log_error "Certificate file is empty or invalid."
+  exit 1
+fi
+
 # Docker container for VPN server
 print_section "Setting up VPN server"
 log_info "Pulling and starting Shadowbox Docker container..."
-docker pull quay.io/outline/shadowbox:stable
+docker pull quay.io/outline/shadowbox:stable || log_error "Failed to pull Shadowbox image."
+
+docker rm -f shadowbox >/dev/null 2>&1 || log_warn "No existing Shadowbox container to remove."
 docker run -d --name shadowbox -p 443:443 -p 8443:8443 \
   -v "$CERT_DIR:$CERT_DIR" \
   -e "SB_API_PORT=8443" -e "SB_CERTIFICATE_KEY=$CERT_KEY" \
@@ -91,15 +115,25 @@ docker run -d --name shadowbox -p 443:443 -p 8443:8443 \
 
 if ! docker ps | grep -q shadowbox; then
   log_error "Shadowbox container failed to start. Checking logs..."
-  docker logs shadowbox
+  docker logs --tail 50 shadowbox || log_error "Unable to fetch Shadowbox logs."
+  exit 1
+fi
+
+log_info "Verifying Shadowbox container health..."
+SHADOWBOX_HEALTH=$(docker inspect -f '{{.State.Health.Status}}' shadowbox 2>/dev/null || echo "unhealthy")
+if [[ "$SHADOWBOX_HEALTH" != "healthy" ]]; then
+  log_error "Shadowbox container is not healthy. Logs:"
+  docker logs --tail 50 shadowbox
   exit 1
 fi
 
 # Monitoring setup
 print_section "Configuring monitoring"
 log_info "Setting up Watchtower for automatic updates..."
-docker pull containrrr/watchtower:latest
-docker run -d --name watchtower -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtower
+docker pull containrrr/watchtower:latest || log_error "Failed to pull Watchtower image."
+
+docker rm -f watchtower >/dev/null 2>&1 || log_warn "No existing Watchtower container to remove."
+docker run -d --name watchtower -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtower || log_error "Failed to start Watchtower container."
 
 # Finalization
 print_section "Finalizing setup"
@@ -126,7 +160,8 @@ log_info "Displaying configuration details..."
 cat /etc/vpn-obfuscation.conf
 
 log_info "Testing obfuscation..."
-OBFS_TEST=$(curl -s -x socks5h://127.0.0.1:443 http://www.google.com || true)
+OBFS_KEY=\$(grep 'obfs-key' /etc/vpn-obfuscation.conf | cut -d ':' -f2 | xargs)
+OBFS_TEST=\$(curl -s -x socks5h://127.0.0.1:443 -U \$OBFS_KEY:http://www.google.com || true)
 if [[ -z "\$OBFS_TEST" ]]; then
   log_error "Obfuscation test failed! Ensure the proxy is running and accessible."
 else
@@ -134,7 +169,7 @@ else
 fi
 
 log_info "Checking Shadowbox logs for issues..."
-docker logs shadowbox || log_error "Unable to fetch Shadowbox logs."
+docker logs --tail 50 shadowbox || log_error "Unable to fetch Shadowbox logs."
 EOF
 chmod +x /opt/vpn-setup-test-commands.sh
 
