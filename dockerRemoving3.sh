@@ -24,7 +24,7 @@ trap error_handler ERR
 
 print_msg $BLUE "Starting Docker cleanup script..."
 
-# Step 1: Stop Docker and related processes
+# Step 1: Stop Docker and related services
 print_msg $BLUE "Stopping Docker and related processes..."
 if sudo systemctl stop docker docker.socket containerd.service; then
     print_msg $GREEN "Docker and related services stopped successfully."
@@ -32,18 +32,12 @@ else
     print_msg $RED "Failed to stop Docker services. Please check manually."
 fi
 
-# Step 2: Kill all Docker-related processes
-print_msg $BLUE "Killing all Docker-related processes..."
-if pids=$(pgrep -f docker); then
-    for pid in $pids; do
-        if sudo kill "$pid"; then
-            print_msg $GREEN "Killed process $pid"
-        else
-            print_msg $RED "Failed to kill process $pid"
-        fi
-    done
+# Step 2: Ensure Docker processes are stopped
+print_msg $BLUE "Ensuring all Docker-related processes are stopped..."
+if pgrep -f docker &> /dev/null; then
+    print_msg $RED "Warning: Some Docker-related processes are still running. Consider restarting the machine."
 else
-    print_msg $GREEN "No Docker-related processes found."
+    print_msg $GREEN "No Docker-related processes running."
 fi
 
 # Step 3: Remove all containers
