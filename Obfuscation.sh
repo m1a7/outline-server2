@@ -17,31 +17,43 @@ SERVER_IP="134.209.178.97"
 PORT_8843="8843"
 PORT_443="443"
 
-# Проверка наличия Shadowsocks
-if ! command -v ss-server &> /dev/null; then
-  echo -e "${RED}Shadowsocks не установлен на этом сервере.${NC}"
+# Проверка наличия Docker
+if ! command -v docker &> /dev/null; then
+  echo -e "${RED}Docker не установлен на этом сервере.${NC}"
   exit 1
 fi
 
-echo -e "${CYAN}Проверка обфускации на сервере...${NC}"
+echo -e "${CYAN}Проверка Docker-контейнеров...${NC}"
 
-# Проверка настроек Shadowsocks
-SS_CONFIG_FILE="/etc/shadowsocks-libev/config.json"
-if [[ -f $SS_CONFIG_FILE ]]; then
-    echo -e "${CYAN}Конфигурационный файл найден: $SS_CONFIG_FILE${NC}"
-    if grep -q "plugin" $SS_CONFIG_FILE; then
-        echo -e "${GREEN}Обфускация включена в конфигурации Shadowsocks.${NC}"
-    else
-        echo -e "${RED}Обфускация не настроена в конфигурации Shadowsocks.${NC}"
-    fi
+# Проверка, запущен ли контейнер с Shadowbox
+SHADOWBOX_CONTAINER=$(docker ps --filter "ancestor=shadowbox" --format "{{.ID}}")
+if [[ -z $SHADOWBOX_CONTAINER ]]; then
+    echo -e "${RED}Контейнер с Shadowbox не найден.${NC}"
+    exit 1
 else
-    echo -e "${RED}Конфигурационный файл Shadowsocks не найден.${NC}"
+    echo -e "${CYAN}Найден контейнер Shadowbox: $SHADOWBOX_CONTAINER${NC}"
 fi
+
+# Извлечение конфигурации из контейнера
+CONFIG_PATH="/root/shadowbox/config.json"
+echo -e "${CYAN}Проверка конфигурации внутри контейнера...${NC}"
+docker exec $SHADOWBOX_CONTAINER cat $CONFIG_PATH > /tmp/shadowbox_config.json
+if [[ $? -ne 0 ]]; then
+    echo -e "${RED}Не удалось получить конфигурацию из контейнера.${NC}"
+    exit 1
+fi
+
+if grep -q "plugin" /tmp/shadowbox_config.json; then
+    echo -e "${GREEN}Обфускация включена в конфигурации Shadowbox.${NC}"
+else
+    echo -e "${RED}Обфускация не настроена в конфигурации Shadowbox.${NC}"
+fi
+rm -f /tmp/shadowbox_config.json
 
 # Анализ трафика на указанных портах
 for PORT in $PORT_8843 $PORT_443; do
     echo -e "${CYAN}Анализ трафика на порту $PORT...${NC}"
-    tcpdump -i any port $PORT -c 10 -nn -v &> /tmp/tcpdump_$PORT.log
+    docker run --rm --net=host nicolaka/netshoot tcpdump -i any port $PORT -c 10 -nn -v &> /tmp/tcpdump_$PORT.log
     if grep -q "TLS" /tmp/tcpdump_$PORT.log; then
         echo -e "${GREEN}Обнаружен TLS-трафик на порту $PORT. Это может указывать на обфускацию.${NC}"
     else
