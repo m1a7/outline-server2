@@ -28,7 +28,6 @@ print_section "Pre-flight checks"
 log_info "Checking for root permissions..."
 if [[ "$EUID" -ne 0 ]]; then
   log_error "This script must be run as root. Use sudo."
-  exit 1
 fi
 
 log_info "Updating system packages..."
@@ -45,7 +44,6 @@ print_section "Setting up Docker"
 log_info "Checking Docker installation..."
 if ! command -v docker >/dev/null 2>&1; then
   log_error "Docker is not installed. Please install Docker before running this script."
-  exit 1
 fi
 
 log_info "Configuring Docker service..."
@@ -87,18 +85,15 @@ openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
 
 if [[ ! -f "$CERT_KEY" || ! -f "$CERT_CRT" ]]; then
   log_error "Certificate generation failed."
-  exit 1
 fi
 
 # Validate generated files
 log_info "Validating generated files..."
 if [[ ! -s "$CERT_KEY" ]]; then
   log_error "Certificate key is empty or invalid."
-  exit 1
 fi
 if [[ ! -s "$CERT_CRT" ]]; then
   log_error "Certificate file is empty or invalid."
-  exit 1
 fi
 
 # Docker container for VPN server
@@ -116,7 +111,6 @@ docker run -d --name shadowbox -p 443:443 -p 8443:8443 \
 if ! docker ps | grep -q shadowbox; then
   log_error "Shadowbox container failed to start. Checking logs..."
   docker logs --tail 50 shadowbox || log_error "Unable to fetch Shadowbox logs."
-  exit 1
 fi
 
 log_info "Verifying Shadowbox container health..."
@@ -124,7 +118,6 @@ SHADOWBOX_HEALTH=$(docker inspect -f '{{.State.Health.Status}}' shadowbox 2>/dev
 if [[ "$SHADOWBOX_HEALTH" != "healthy" ]]; then
   log_error "Shadowbox container is not healthy. Logs:"
   docker logs --tail 50 shadowbox
-  exit 1
 fi
 
 # Monitoring setup
