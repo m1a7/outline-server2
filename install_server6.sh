@@ -43,6 +43,7 @@ openssl req -x509 -nodes -days 36500 -newkey rsa:4096 \
   -subj "/CN=$(curl -s https://icanhazip.com/)" \
   -keyout "${CERT_KEY}" -out "${CERT_FILE}"
 
+# Вывод информации о сертификатах
 echo -e "${GREEN}Сертификат создан:${NC}"
 echo -e "${BLUE}Путь к ключу: ${CERT_KEY}${NC}"
 echo -e "${BLUE}Путь к сертификату: ${CERT_FILE}${NC}"
@@ -63,7 +64,7 @@ cat <<EOF > "${STATE_DIR}/shadowbox_server_config.json"
 EOF
 echo -e "${GREEN}Файл конфигурации создан: ${BLUE}${STATE_DIR}/shadowbox_server_config.json${NC}"
 
-# Удаление старых контейнеров (если есть)
+# Удаление старых контейнеров
 docker rm -f shadowbox 2>/dev/null || true
 docker rm -f watchtower 2>/dev/null || true
 
@@ -78,46 +79,46 @@ docker run -d --name shadowbox --restart always \
   -e "SB_CERTIFICATE_FILE=${CERT_FILE}" \
   -e "SB_PRIVATE_KEY_FILE=${CERT_KEY}" \
   -e "SB_METRICS_URL=" \
-  "${SB_IMAGE}"
+  "${SB_IMAGE}" || echo -e "${RED}Ошибка запуска контейнера shadowbox.${NC}"
 
-# Установка Watchtower для автообновлений
+# Установка Watchtower
 echo -e "${CYAN}Установка Watchtower...${NC}"
 docker run -d --name watchtower --restart always \
   --label 'com.centurylinklabs.watchtower.enable=true' \
   --label 'com.centurylinklabs.watchtower.scope=outline' \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  containrrr/watchtower --cleanup --label-enable --scope=outline --tlsverify --interval 3600
+  containrrr/watchtower --cleanup --label-enable --scope=outline --tlsverify --interval 3600 || echo -e "${RED}Ошибка запуска Watchtower.${NC}"
 
 # Проверка состояния сервера
 echo -e "${CYAN}Начинаем тестирование...${NC}"
 
-# 1. Проверка открытых портов
+# Проверка открытых портов
 echo -e "${CYAN}Проверка открытых портов...${NC}"
-START_PORT=443
-END_PORT=65535
+if nc -zv 127.0.0.1 443 &> /dev/null; then
+  echo -e "${GREEN}Порт 443 доступен.${NC}"
+else
+  echo -e "${RED}Порт 443 недоступен.${NC}"
+fi
 
-last_status=""
-range_start=""
-problem_ports=0
-
-
-# 2. Проверка состояния контейнеров
+# Проверка контейнеров
 echo -e "${CYAN}Проверка контейнеров Docker...${NC}"
 if docker ps | grep -q shadowbox; then
   echo -e "${GREEN}Контейнер shadowbox работает.${NC}"
 else
   echo -e "${RED}Контейнер shadowbox не запущен!${NC}"
+  docker logs shadowbox || true
 fi
 
 if docker ps | grep -q watchtower; then
   echo -e "${GREEN}Контейнер watchtower работает.${NC}"
 else
   echo -e "${RED}Контейнер watchtower не запущен!${NC}"
+  docker logs watchtower || true
 fi
 
-# 3. Проверка конфигурации контейнеров
+# Проверка конфигурации контейнеров
 echo -e "${CYAN}Проверка конфигурации контейнеров...${NC}"
-SHADOWBOX_LOGS=$(docker logs shadowbox 2>&1 | grep 'apiUrl')
+SHADOWBOX_LOGS=$(docker logs shadowbox 2>&1 | grep 'apiUrl' || true)
 if [[ -n "$SHADOWBOX_LOGS" ]]; then
   echo -e "${GREEN}Конфигурация shadowbox корректна.${NC}"
   echo -e "${BLUE}URL для подключения:${NC} $SHADOWBOX_LOGS"
@@ -125,7 +126,7 @@ else
   echo -e "${RED}Ошибка в конфигурации shadowbox!${NC}"
 fi
 
-# 4. Проверка правил брандмауэра
+# Проверка правил брандмауэра
 echo -e "${CYAN}Проверка правил брандмауэра...${NC}"
 if sudo ufw status | grep -q '443'; then
   echo -e "${GREEN}Порты для TCP/UDP разрешены.${NC}"
@@ -144,8 +145,7 @@ fi
 
 echo -e "${CYAN}Тестирование завершено.${NC}"
 
-
-# Вывод конфигурационной строки для Outline Manager
+# Вывод конфигурации для Outline Manager
 API_URL="https://$(curl -s https://icanhazip.com/):443/${SB_API_PREFIX}"
 CERT_SHA256=$(openssl x509 -in "${CERT_FILE}" -noout -sha256 -fingerprint | cut -d'=' -f2 | tr -d ':')
 CONFIG_STRING="{apiUrl:${API_URL},certSha256:${CERT_SHA256}}"
@@ -172,3 +172,6 @@ echo "docker logs shadowbox | grep 'apiUrl'"
 
 echo -e "${BLUE}# Проверить обфускацию${NC}"
 echo "docker logs shadowbox | grep 'obfs'"
+
+# Завершение
+echo -e "${CYAN}Скрипт выполнен успешно.${NC}"
