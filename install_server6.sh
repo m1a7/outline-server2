@@ -24,6 +24,7 @@ systemctl enable --now docker
 
 # Настройка брандмауэра
 echo -e "${CYAN}Настройка брандмауэра...${NC}"
+sudo ufw enable
 ufw allow 443/tcp
 ufw allow 1024:65535/tcp
 ufw allow 1024:65535/udp
@@ -159,6 +160,8 @@ if [[ -n "$SHADOWBOX_LOGS" ]]; then
 else
   echo -e "${RED}Ошибка в конфигурации shadowbox!${NC}"
 fi
+
+sudo ufw reload
 
 # Проверка правил брандмауэра
 echo -e "${CYAN}Проверка правил брандмауэра...${NC}"
