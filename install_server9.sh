@@ -25,23 +25,12 @@ systemctl enable --now docker
 # Настройка брандмауэра
 # Настройка брандмауэра
 echo -e "${CYAN}Настройка брандмауэра для открытия всех соединений...${NC}"
-ufw --force enable
+ufw enable
 ufw default allow incoming
 ufw default allow outgoing
-ufw allow 8843/tcp
 ufw allow 1024:65535/tcp
 ufw allow 1024:65535/udp
 ufw reload
-
-# Дополнительная настройка iptables
-# IPTables
-if ! sudo iptables -C INPUT -p tcp --dport 8843 -j ACCEPT 2>/dev/null; then
-  echo -e "${CYAN}Добавление правила для порта 8843 в iptables...${NC}"
-  sudo iptables -I INPUT -p tcp --dport 8843 -j ACCEPT
-else
-  echo -e "${GREEN}Правило для порта 8843 уже существует в iptables.${NC}"
-fi
-
 
 # Переменные
 SHADOWBOX_DIR="/opt/outline"
