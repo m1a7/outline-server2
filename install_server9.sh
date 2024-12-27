@@ -28,8 +28,6 @@ echo -e "${CYAN}Настройка брандмауэра для открыти�
 ufw enable
 ufw default allow incoming
 ufw default allow outgoing
-ufw allow 1024:65535/tcp
-ufw allow 1024:65535/udp
 ufw reload
 
 # Переменные
@@ -160,8 +158,6 @@ if [[ -n "$SHADOWBOX_LOGS" ]]; then
 else
   echo -e "${RED}Ошибка в конфигурации shadowbox!${NC}"
 fi
-
-sudo ufw reload
 
 # Проверка правил брандмауэра
 echo -e "${CYAN}Проверка правил брандмауэра...${NC}"
