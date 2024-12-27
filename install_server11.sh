@@ -63,14 +63,30 @@ log_info "Creating obfuscation configuration..."
 OBFS_KEY=$(openssl rand -base64 32)
 echo "obfs-key: $OBFS_KEY" > /etc/vpn-obfuscation.conf
 
+# Generate self-signed certificate
+print_section "Generating certificates"
+CERT_DIR="/opt/outline"
+mkdir -p "$CERT_DIR"
+CERT_KEY="$CERT_DIR/key.pem"
+CERT_CRT="$CERT_DIR/cert.pem"
+log_info "Creating self-signed certificate..."
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout "$CERT_KEY" -out "$CERT_CRT" \
+  -subj "/C=US/ST=State/L=City/O=Organization/OU=Unit/CN=localhost"
+
+if [[ ! -f "$CERT_KEY" || ! -f "$CERT_CRT" ]]; then
+  log_error "Certificate generation failed."
+  exit 1
+fi
+
 # Docker container for VPN server
 print_section "Setting up VPN server"
 log_info "Pulling and starting Shadowbox Docker container..."
 docker pull quay.io/outline/shadowbox:stable
 docker run -d --name shadowbox -p 443:443 -p 8443:8443 \
-  -v /opt/outline:/opt/outline \
-  -e "SB_API_PORT=8443" -e "SB_CERTIFICATE_KEY=/opt/outline/key.pem" \
-  -e "SB_CERTIFICATE_CERT=/opt/outline/cert.pem" \
+  -v "$CERT_DIR:$CERT_DIR" \
+  -e "SB_API_PORT=8443" -e "SB_CERTIFICATE_KEY=$CERT_KEY" \
+  -e "SB_CERTIFICATE_CERT=$CERT_CRT" \
   quay.io/outline/shadowbox:stable
 
 if ! docker ps | grep -q shadowbox; then
@@ -81,6 +97,7 @@ fi
 # Monitoring setup
 print_section "Configuring monitoring"
 log_info "Setting up Watchtower for automatic updates..."
+docker pull containrrr/watchtower:latest
 docker run -d --name watchtower -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtower
 
 # Finalization
@@ -120,7 +137,7 @@ chmod +x /opt/vpn-setup-test-commands.sh
 # Generate Outline Manager Configuration
 SERVER_IP=$(curl -s ifconfig.me)
 API_KEY=$(openssl rand -hex 16)
-CERT_SHA256=$(openssl x509 -in /opt/outline/cert.pem -fingerprint -sha256 -noout | cut -d '=' -f2 | sed 's/://g')
+CERT_SHA256=$(openssl x509 -in "$CERT_CRT" -fingerprint -sha256 -noout | cut -d '=' -f2 | sed 's/://g')
 
 CONFIG_JSON="{\"apiUrl\":\"https://$SERVER_IP:8443/$API_KEY\",\"certSha256\":\"$CERT_SHA256\"}"
 
