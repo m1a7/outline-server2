@@ -30,12 +30,26 @@ ufw allow 1024:65535/udp
 ufw reload
 
 # Включение брандмауэра и разрешение всех соединений
-echo -e "${CYAN}Включение брандмауэра и настройка...${NC}"
+# Включение и настройка Firewall
+echo -e "${CYAN}Настройка Firewall и брандмауэра...${NC}"
 ufw default allow incoming
 ufw default allow outgoing
 ufw --force enable
-echo -e "${GREEN}Брандмауэр включен и все соединения разрешены.${NC}"
+
+# Установка правил для порта 443
+echo -e "${CYAN}Открытие порта 443 через брандмауэр...${NC}"
+ufw allow 443/tcp
 ufw reload
+
+# Дополнительная настройка iptables
+echo -e "${CYAN}Настройка iptables...${NC}"
+iptables -I INPUT -p tcp --dport 443 -j ACCEPT
+iptables -I OUTPUT -p tcp --sport 443 -j ACCEPT
+iptables -I INPUT -p udp --dport 443 -j ACCEPT
+iptables -I OUTPUT -p udp --sport 443 -j ACCEPT
+
+# Сохранение правил iptables
+iptables-save > /etc/iptables/rules.v4
 
 # Переменные
 SHADOWBOX_DIR="/opt/outline"
