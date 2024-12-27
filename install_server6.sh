@@ -24,7 +24,7 @@ systemctl enable --now docker
 
 # Настройка брандмауэра
 echo -e "${CYAN}Настройка брандмауэра...${NC}"
-#sudo ufw enable
+ufw --force enable
 ufw allow 443/tcp
 ufw allow 1024:65535/tcp
 ufw allow 1024:65535/udp
@@ -35,7 +35,6 @@ ufw reload
 echo -e "${CYAN}Настройка Firewall и брандмауэра...${NC}"
 ufw default allow incoming
 ufw default allow outgoing
-ufw --force enable
 
 # Установка правил для порта 443
 # UFW
@@ -57,8 +56,6 @@ else
   echo -e "${GREEN}Правило для порта 443 уже существует в iptables.${NC}"
 fi
 
-# Сохранение правил iptables
-iptables-save > /etc/iptables/rules.v4
 
 # Переменные
 SHADOWBOX_DIR="/opt/outline"
