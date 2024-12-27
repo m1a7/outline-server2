@@ -96,6 +96,34 @@ echo -e "${GREEN}Файл конфигурации создан: ${BLUE}${STATE_
 docker rm -f shadowbox 2>/dev/null || true
 docker rm -f watchtower 2>/dev/null || true
 
+# Проверка и освобождение порта 443
+echo -e "${CYAN}Проверка использования порта 443...${NC}"
+if lsof -i :443 &>/dev/null; then
+  echo -e "${RED}Порт 443 уже используется!${NC}"
+  echo -e "${CYAN}Процессы, использующие порт 443:${NC}"
+  lsof -i :443
+  echo -e "${CYAN}Попытка завершить процессы, использующие порт 443...${NC}"
+  lsof -i :443 | awk 'NR>1 {print $2}' | xargs -r kill -9
+  echo -e "${GREEN}Процессы, использующие порт 443, были завершены.${NC}"
+else
+  echo -e "${GREEN}Порт 443 свободен.${NC}"
+fi
+
+# Проверка открытых портов
+echo -e "${CYAN}Проверка открытых портов...${NC}"
+if nc -zv 127.0.0.1 443 &> /dev/null; then
+  echo -e "${GREEN}Порт 443 доступен.${NC}"
+else
+  echo -e "${RED}Порт 443 недоступен.${NC}"
+  echo -e "${CYAN}Попытка открыть порт 443...${NC}"
+  ufw allow 443/tcp && ufw reload
+  if nc -zv 127.0.0.1 443 &> /dev/null; then
+    echo -e "${GREEN}Порт 443 успешно открыт.${NC}"
+  else
+    echo -e "${RED}Не удалось открыть порт 443. Проверьте настройки вручную.${NC}"
+  fi
+fi
+
 # Запуск контейнера Shadowbox
 echo -e "${CYAN}Запуск контейнера Shadowbox...${NC}"
 docker run -d --name shadowbox --restart always \
@@ -126,33 +154,6 @@ if lsof -i :443 &>/dev/null; then
   lsof -i :443
   echo -e "${RED}Ручная проверка требуется!${NC}"
   exit 1
-fi
-
-# Проверка открытых портов
-# Проверка использования порта 443
-echo -e "${CYAN}Проверка использования порта 443...${NC}"
-if lsof -i :443 &>/dev/null; then
-  echo -e "${RED}Порт 443 уже используется!${NC}"
-  echo -e "${CYAN}Попытка завершить процессы, использующие порт 443...${NC}"
-  lsof -i :443 | awk 'NR>1 {print $2}' | xargs -r kill -9
-  echo -e "${GREEN}Процессы, использующие порт 443, были завершены.${NC}"
-else
-  echo -e "${GREEN}Порт 443 свободен.${NC}"
-fi
-
-# Проверка открытых портов
-echo -e "${CYAN}Проверка открытых портов...${NC}"
-if nc -zv 127.0.0.1 443 &> /dev/null; then
-  echo -e "${GREEN}Порт 443 доступен.${NC}"
-else
-  echo -e "${RED}Порт 443 недоступен.${NC}"
-  echo -e "${CYAN}Попытка открыть порт 443...${NC}"
-  ufw allow 443/tcp && ufw reload
-  if nc -zv 127.0.0.1 443 &> /dev/null; then
-    echo -e "${GREEN}Порт 443 успешно открыт.${NC}"
-  else
-    echo -e "${RED}Не удалось открыть порт 443. Проверьте настройки вручную.${NC}"
-  fi
 fi
 
 # Проверка контейнеров
