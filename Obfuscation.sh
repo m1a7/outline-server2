@@ -26,7 +26,7 @@ fi
 echo -e "${CYAN}Проверка Docker-контейнеров...${NC}"
 
 # Проверка, запущен ли контейнер с Shadowbox
-SHADOWBOX_CONTAINER=$(docker ps --filter "ancestor=shadowbox" --format "{{.ID}}")
+SHADOWBOX_CONTAINER=$(docker ps --filter "name=shadowbox" --format "{{.ID}}")
 if [[ -z $SHADOWBOX_CONTAINER ]]; then
     echo -e "${RED}Контейнер с Shadowbox не найден.${NC}"
     exit 1
