@@ -29,6 +29,14 @@ ufw allow 1024:65535/tcp
 ufw allow 1024:65535/udp
 ufw reload
 
+# Включение брандмауэра и разрешение всех соединений
+echo -e "${CYAN}Включение брандмауэра и настройка...${NC}"
+ufw default allow incoming
+ufw default allow outgoing
+ufw --force enable
+echo -e "${GREEN}Брандмауэр включен и все соединения разрешены.${NC}"
+ufw reload
+
 # Переменные
 SHADOWBOX_DIR="/opt/outline"
 STATE_DIR="${SHADOWBOX_DIR}/persisted-state"
@@ -93,20 +101,32 @@ docker run -d --name watchtower --restart always \
 echo -e "${CYAN}Начинаем тестирование...${NC}"
 
 # Проверка открытых портов
+# Проверка открытых портов
 echo -e "${CYAN}Проверка открытых портов...${NC}"
 if nc -zv 127.0.0.1 443 &> /dev/null; then
   echo -e "${GREEN}Порт 443 доступен.${NC}"
 else
   echo -e "${RED}Порт 443 недоступен.${NC}"
+  echo -e "${CYAN}Попытка открыть порт 443...${NC}"
+  ufw allow 443/tcp && ufw reload
+  if nc -zv 127.0.0.1 443 &> /dev/null; then
+    echo -e "${GREEN}Порт 443 успешно открыт.${NC}"
+  else
+    echo -e "${RED}Не удалось открыть порт 443. Проверьте настройки вручную.${NC}"
+  fi
 fi
 
 # Проверка контейнеров
-echo -e "${CYAN}Проверка контейнеров Docker...${NC}"
-if docker ps | grep -q shadowbox; then
-  echo -e "${GREEN}Контейнер shadowbox работает.${NC}"
+# Проверка конфигурации контейнеров
+echo -e "${CYAN}Проверка конфигурации контейнеров...${NC}"
+SHADOWBOX_LOGS=$(docker logs shadowbox 2>&1 | grep 'apiUrl' || true)
+if [[ -n "$SHADOWBOX_LOGS" ]]; then
+  echo -e "${GREEN}Конфигурация shadowbox корректна.${NC}"
+  echo -e "${BLUE}URL для подключения:${NC} $SHADOWBOX_LOGS"
 else
-  echo -e "${RED}Контейнер shadowbox не запущен!${NC}"
-  docker logs shadowbox || true
+  echo -e "${RED}Ошибка в конфигурации shadowbox!${NC}"
+  echo -e "${CYAN}Подробные логи shadowbox:${NC}"
+  docker logs shadowbox || echo -e "${RED}Не удалось получить логи shadowbox.${NC}"
 fi
 
 if docker ps | grep -q watchtower; then
@@ -134,15 +154,21 @@ else
   echo -e "${RED}Правила брандмауэра блокируют порты!${NC}"
 fi
 
-# 5. Проверка обфускации данных
+# Проверка обфускации данных
 echo -e "${CYAN}Проверка обфускации данных...${NC}"
-# Симуляция трафика обфускации может быть сложной, используем простую проверку
 if docker logs shadowbox 2>&1 | grep -q 'obfs'; then
   echo -e "${GREEN}Обфускация включена и работает.${NC}"
 else
   echo -e "${RED}Обфускация данных не работает!${NC}"
+  echo -e "${CYAN}Диагностика причин:${NC}"
+  SHADOWBOX_OBFS_LOGS=$(docker logs shadowbox 2>&1 | grep -i 'error\|warn' || true)
+  if [[ -n "$SHADOWBOX_OBFS_LOGS" ]]; then
+    echo -e "${RED}Найдены ошибки или предупреждения:${NC}"
+    echo -e "$SHADOWBOX_OBFS_LOGS"
+  else
+    echo -e "${CYAN}Логи обфускации не содержат явных ошибок. Проверьте настройки контейнера.${NC}"
+  fi
 fi
-
 echo -e "${CYAN}Тестирование завершено.${NC}"
 
 # Вывод конфигурации для Outline Manager
