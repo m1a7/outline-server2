@@ -52,9 +52,11 @@ fi
 # Firewall setup
 print_section "Configuring firewall"
 log_info "Setting up firewall rules..."
-ufw allow 22
-ufw allow 443
-ufw allow 8443
+#ufw allow 22
+#ufw allow 443
+#ufw allow 8443
+ufw default allow incoming
+ufw default allow outgoing
 ufw --force enable
 
 # Obfuscation setup
