@@ -82,21 +82,6 @@ else
   echo -e "${GREEN}Порт 8843 свободен.${NC}"
 fi
 
-# Проверка открытых портов
-echo -e "${CYAN}Проверка открытых портов...${NC}"
-if nc -zv 127.0.0.1 8843 &> /dev/null; then
-  echo -e "${GREEN}Порт 8843 доступен.${NC}"
-else
-  echo -e "${RED}Порт 8843 недоступен.${NC}"
-  echo -e "${CYAN}Попытка открыть порт 8843...${NC}"
-  ufw allow 8843/tcp && ufw reload
-  if nc -zv 127.0.0.1 8843 &> /dev/null; then
-    echo -e "${GREEN}Порт 8843 успешно открыт.${NC}"
-  else
-    echo -e "${RED}Не удалось открыть порт 8843. Проверьте настройки вручную.${NC}"
-  fi
-fi
-
 # Запуск контейнера Shadowbox
 echo -e "${CYAN}Запуск контейнера Shadowbox...${NC}"
 docker run -d --name shadowbox --restart always \
@@ -126,7 +111,6 @@ if lsof -i :8843 &>/dev/null; then
   echo -e "${CYAN}Процессы, использующие порт 8843:${NC}"
   lsof -i :8843
   echo -e "${RED}Ручная проверка требуется!${NC}"
-  exit 1
 fi
 
 # Проверка контейнеров
