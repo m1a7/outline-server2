@@ -25,7 +25,7 @@ log_error() {
 # Переменные
 SERVER_IP="68.183.234.156"
 SERVER_PORT=443
-SS_PASSWORD="strongpassword"
+SS_PASSWORD="Auth777Key$DO"
 SS_METHOD="aes-256-gcm"
 PLUGIN_OPTS="obfs=tls"
 
