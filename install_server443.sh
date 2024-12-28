@@ -41,9 +41,16 @@
 
 set -euo pipefail
 
+
+# Install obfs4proxy for traffic obfuscation
+apt-get update && apt-get install -y obfs4proxy
+
 function display_usage() {
   cat <<EOF
-Usage: install_server.sh [--hostname <hostname>] [--api-port <port>] [--keys-port <port>]
+Usage
+
+  --obfuscation-port: Set the port for traffic obfuscation.
+: install_server.sh [--hostname <hostname>] [--api-port <port>] [--keys-port <port>]
 
   --hostname   The hostname to be used to access the management API and access keys
   --api-port   The port number for the management API
@@ -476,11 +483,6 @@ install_shadowbox() {
 
   log_for_sentry "Setting API port"
   API_PORT="${FLAGS_API_PORT}"
-
-# Add support for obfuscation
-plugin="v2ray-plugin"
-plugin_opts="server;path=/ws;host=example.com"
-
   if (( API_PORT == 0 )); then
     API_PORT=${SB_API_PORT:-$(get_random_port)}
   fi
@@ -598,6 +600,15 @@ function parse_flags() {
           exit 1
         fi
         ;;
+
+      --obfuscation-port)
+        FLAGS_OBFUSCATION_PORT=$1
+        shift
+        if ! is_valid_port "${FLAGS_OBFUSCATION_PORT}"; then
+          log_error "Invalid value for ${flag}: ${FLAGS_OBFUSCATION_PORT}" >&2
+          exit 1
+        fi
+        ;;
       --keys-port)
         FLAGS_KEYS_PORT=$1
         shift
@@ -626,10 +637,19 @@ function parse_flags() {
 function main() {
   trap finish EXIT
   declare FLAGS_HOSTNAME=""
-  declare -i FLAGS_API_PORT=443
-  declare -i FLAGS_KEYS_PORT=8443
+  declare -i FLAGS_API_PORT=0
+  declare -i FLAGS_KEYS_PORT=0
   parse_flags "$@"
   install_shadowbox
+
+  if [ -n "${FLAGS_OBFUSCATION_PORT}" ]; then
+      docker run -d \
+        -e ENABLE_OBFUSCATION=true \
+        -e OBFUSCATION_PORT=${FLAGS_OBFUSCATION_PORT} \
+        -p ${FLAGS_OBFUSCATION_PORT}:${FLAGS_OBFUSCATION_PORT} \
+        quay.io/outline/shadowbox:nightly
+  fi
+
 }
 
 main "$@"
