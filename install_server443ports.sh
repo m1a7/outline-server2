@@ -398,9 +398,7 @@ function start_watchtower() {
 
 # Waits for the service to be up and healthy
 function wait_shadowbox() {
-  # We use insecure connection because our threat model doesn't include localhost port
-  # interception and our certificate doesn't have localhost as a subject alternative name
-  until fetch --insecure "${LOCAL_API_URL}/access-keys" >/dev/null; do sleep 1; done
+  echo "Waiting for Outline server to become healthy at ${SB_ACCESS_KEYS_URL}/access-keys" >/dev/null; do sleep 1; done
 }
 
 function create_first_user() {
@@ -635,17 +633,44 @@ function parse_flags() {
   return 0
 }
 
+function check_ports() {
+  for port in $SB_PORT_HTTP $SB_PORT_HTTPS; do
+    if lsof -i :"$port" >/dev/null 2>&1; then
+      echo "Error: Port $port is already in use. Please free the port or change the configuration." >&2
+      exit 1
+    fi
+  done
+}
+
+function check_docker() {
+  if ! docker ps >/dev/null 2>&1; then
+    echo "Error: Docker is not running. Please start Docker and retry." >&2
+    exit 1
+  fi
+}
+
+function check_environment() {
+  if [[ -z "${LOCAL_API_URL}
+
+function start_server_in_background() {
+  echo "Starting Outline server in background..."
+  docker run -d \
+    --name shadowbox-server \
+    -p 8080:80 -p 8443:443 \
+    your_image_name
+}
+
 function main() {
-  trap finish EXIT
-  declare FLAGS_HOSTNAME=""
-  declare -i FLAGS_API_PORT=0
-  declare -i FLAGS_KEYS_PORT=0
-     declare -i FLAGS_OBFUSCATION_PORT=0  # Added for obfuscation initialization
+  echo "Checking prerequisites..."
+  check_ports
+  check_docker
+  check_environment
+  
+  start_server_in_background
+  wait_shadowbox
 
-  parse_flags "$@"
-  install_shadowbox
-
-  if [ -n "${FLAGS_OBFUSCATION_PORT}" ]; then
+  echo "Outline server setup completed successfully."
+}" ]; then
       docker run -d \
         -e ENABLE_OBFUSCATION=true \
         -e OBFUSCATION_PORT=${FLAGS_OBFUSCATION_PORT} \
