@@ -639,6 +639,8 @@ function main() {
   declare FLAGS_HOSTNAME=""
   declare -i FLAGS_API_PORT=0
   declare -i FLAGS_KEYS_PORT=0
+     declare -i FLAGS_OBFUSCATION_PORT=0  # Added for obfuscation initialization
+
   parse_flags "$@"
   install_shadowbox
 
