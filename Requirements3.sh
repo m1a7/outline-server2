@@ -604,7 +604,7 @@ function obtain_letsencrypt() {
   else
     echo "Let’s Encrypt certificate not found, continuing self-signed..."
   fi
-}
+} 
 
 ################################################################################
 ###                                MAIN                                       ###
