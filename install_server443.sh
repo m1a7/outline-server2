@@ -627,7 +627,7 @@ function main() {
   trap finish EXIT
   declare FLAGS_HOSTNAME=""
   declare -i FLAGS_API_PORT=443
-  declare -i FLAGS_KEYS_PORT=443
+  declare -i FLAGS_KEYS_PORT=8443
   parse_flags "$@"
   install_shadowbox
 }
