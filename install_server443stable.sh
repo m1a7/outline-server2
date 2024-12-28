@@ -308,61 +308,61 @@ function write_config() {
 }
 
 function start_shadowbox() {
-  # Define the start script location.
+  # TODO(fortuna): Write API_PORT to config file,
+  # rather than pass in the environment.
   local -r START_SCRIPT="${STATE_DIR}/start_container.sh"
-
-  # Generate the start script dynamically.
   cat <<-EOF > "${START_SCRIPT}"
 # This script starts the Outline server container ("Shadowbox").
-# Updated to use standard ports for VPN traffic concealment.
+# If you need to customize how the server is run, you can edit this script, then restart with:
+#
+#     "${START_SCRIPT}"
 
 set -eu
 
-# Stop and remove existing containers to avoid conflicts.
 docker stop "${CONTAINER_NAME}" 2> /dev/null || true
 docker rm -f "${CONTAINER_NAME}" 2> /dev/null || true
 
-# Define Docker command to launch the container.
 docker_command=(
   docker
   run
   -d
   --name "${CONTAINER_NAME}" --restart always --net host
 
-  # Add log rotation settings.
+  # Used by Watchtower to know which containers to monitor.
+  --label 'com.centurylinklabs.watchtower.enable=true'
+  --label 'com.centurylinklabs.watchtower.scope=outline'
+
+  # Use log rotation. See https://docs.docker.com/config/containers/logging/configure/.
   --log-driver local
 
-  # Mount persistent state directory.
+  # The state that is persisted across restarts.
   -v "${STATE_DIR}:${STATE_DIR}"
 
-  # Environment variables for server configuration.
+  # Where the container keeps its persistent state.
   -e "SB_STATE_DIR=${STATE_DIR}"
-  -e "SB_API_PORT=443"  # Use HTTPS default port
+
+  # Port number and path prefix used by the server manager API.
+  -e "SB_API_PORT=${API_PORT}"
   -e "SB_API_PREFIX=${SB_API_PREFIX}"
+
+  # Location of the API TLS certificate and key.
   -e "SB_CERTIFICATE_FILE=${SB_CERTIFICATE_FILE}"
   -e "SB_PRIVATE_KEY_FILE=${SB_PRIVATE_KEY_FILE}"
 
-  # Optional: Metrics URL for reporting.
+  # Where to report metrics to, if opted-in.
   -e "SB_METRICS_URL=${SB_METRICS_URL:-}"
 
-  # Specify the container image.
+  # The Outline server image to run.
   "${SB_IMAGE}"
 )
-
-# Execute the Docker command.
 "\${docker_command[@]}"
 EOF
-
-  # Make the start script executable.
   chmod +x "${START_SCRIPT}"
-
-  # Run the container and handle errors.
+  # Declare then assign. Assigning on declaration messes up the return code.
   local STDERR_OUTPUT
   STDERR_OUTPUT="$({ "${START_SCRIPT}" >/dev/null; } 2>&1)" && return
   readonly STDERR_OUTPUT
   log_error "FAILED"
-
-  # Handle container conflicts if any.
   if docker_container_exists "${CONTAINER_NAME}"; then
     handle_docker_container_conflict "${CONTAINER_NAME}" true
     return
@@ -371,7 +371,6 @@ EOF
     return 1
   fi
 }
-
 
 function start_watchtower() {
   # Start watchtower to automatically fetch docker image updates.
@@ -398,7 +397,9 @@ function start_watchtower() {
 
 # Waits for the service to be up and healthy
 function wait_shadowbox() {
-  echo "Waiting for Outline server to become healthy at ${SB_ACCESS_KEYS_URL}/access-keys" >/dev/null; do sleep 1; done
+  # We use insecure connection because our threat model doesn't include localhost port
+  # interception and our certificate doesn't have localhost as a subject alternative name
+  until fetch --insecure "${LOCAL_API_URL}/access-keys" >/dev/null; do sleep 1; done
 }
 
 function create_first_user() {
@@ -633,49 +634,22 @@ function parse_flags() {
   return 0
 }
 
-function check_ports() {
-  for port in $SB_PORT_HTTP $SB_PORT_HTTPS; do
-    if lsof -i :"$port" >/dev/null 2>&1; then
-      echo "Error: Port $port is already in use. Please free the port or change the configuration." >&2
-      exit 1
-    fi
-  done
-}
-
-function check_docker() {
-  if ! docker ps >/dev/null 2>&1; then
-    echo "Error: Docker is not running. Please start Docker and retry." >&2
-    exit 1
-  fi
-}
-
-function check_environment() {
-  if [[ -z "${LOCAL_API_URL}
-
-function start_server_in_background() {
-  echo "Starting Outline server in background..."
-  docker run -d \
-    --name shadowbox-server \
-    -p 8080:80 -p 8443:443 \
-    your_image_name
-}
-
 function main() {
-  echo "Checking prerequisites..."
-  check_ports
-  check_docker
-  check_environment
-  
-  start_server_in_background
-  wait_shadowbox
+  trap finish EXIT
+  declare FLAGS_HOSTNAME=""
+  declare -i FLAGS_API_PORT=0
+  declare -i FLAGS_KEYS_PORT=0
+     declare -i FLAGS_OBFUSCATION_PORT=0  # Added for obfuscation initialization
 
-  echo "Outline server setup completed successfully."
-}" ]; then
+  parse_flags "$@"
+  install_shadowbox
+
+  if [ -n "${FLAGS_OBFUSCATION_PORT}" ]; then
       docker run -d \
         -e ENABLE_OBFUSCATION=true \
         -e OBFUSCATION_PORT=${FLAGS_OBFUSCATION_PORT} \
         -p ${FLAGS_OBFUSCATION_PORT}:${FLAGS_OBFUSCATION_PORT} \
-        quay.io/outline/shadowbox:nightly
+        quay.io/outline/shadowbox:stable
   fi
 
 }
