@@ -4,12 +4,13 @@
 # Скрипт полностью совместим с Outline Manager и Ubuntu 22.04.
 # Логирование выполнено в цветном формате для удобства чтения.
 
-set -e
+set +e
 
 # Цвета для логирования
 RED="\033[0;31m"
 GREEN="\033[0;32m"
-YELLOW="\033[0;33m"
+YELLOW="\033[1;33m"
+CYAN="\033[0;36m"
 NC="\033[0m" # No Color
 
 # Константы
@@ -17,15 +18,19 @@ MTU_VALUE=1500
 VPN_PORT=443
 OBFUSCATION_PORT=8443
 NAT_INTERFACE=eth0
-ACCESS_CONFIG="/opt/outline/access.txt"
 SHADOWBOX_DIR="/opt/outline"
 DOCKER_IMAGE="quay.io/outline/shadowbox:stable"
 CERT_SHA256=""
 API_URL=""
+CURRENT_STEP=""
 
 # Логирование
 log_info() {
-  echo -e "${GREEN}[INFO] $1${NC}"
+  echo -e "${CYAN}[INFO] $1${NC}"
+}
+
+log_success() {
+  echo -e "${GREEN}[OK] $1${NC}"
 }
 
 log_warning() {
@@ -33,128 +38,130 @@ log_warning() {
 }
 
 log_error() {
-  echo -e "${RED}[ERROR] $1${NC}"
+  local errmsg="$1"
+  echo -e "${RED}[ERROR] $errmsg${NC}"
+  echo -e "${RED}[ERROR] Вопрос для ChatGPT: 'Почему в процессе выполнения шага "${CURRENT_STEP}" возникла ошибка: "${errmsg}"?'${NC}"
+}
+
+run_command() {
+  local step_description="$1"
+  shift
+  CURRENT_STEP="$step_description"
+
+  log_info "Начало шага: '$step_description'"
+  if "$@"; then
+    log_success "Шаг '$step_description' завершён успешно."
+  else
+    log_error "Не удалось выполнить шаг '$step_description'."
+  fi
 }
 
 # Функция для проверки и подготовки окружения
 prepare_environment() {
-  log_info "Проверка необходимых компонентов..."
-
-  # Проверка наличия Docker
-  if ! command -v docker &> /dev/null; then
-    log_warning "Docker не установлен. Устанавливаем Docker..."
-    curl -sSL https://get.docker.com/ | sh
-    if [ $? -eq 0 ]; then
-      log_info "Docker успешно установлен."
+  run_command "Проверка наличия Docker" bash -c '
+    if ! command -v docker &>/dev/null; then
+      echo "Docker не найден. Устанавливаем..."
+      curl -fsSL https://get.docker.com | sh
+      if [[ $? -eq 0 ]]; then
+        echo "Docker установлен успешно."
+      else
+        echo "Не удалось установить Docker!"
+        exit 1
+      fi
     else
-      log_error "Ошибка установки Docker. Проверьте подключение к интернету."
+      echo "Docker уже установлен."
     fi
-  else
-    log_info "Docker уже установлен."
-  fi
+  '
 
-  # Создание директории для Outline
-  if [ ! -d "$SHADOWBOX_DIR" ]; then
-    log_info "Создание директории для Outline..."
+  run_command "Проверка, что Docker запущен" bash -c '
+    if ! systemctl is-active --quiet docker; then
+      echo "Docker не запущен. Попытаюсь запустить..."
+      systemctl enable docker
+      systemctl start docker
+      if ! systemctl is-active --quiet docker; then
+        echo "Не удалось запустить Docker!"
+        exit 1
+      fi
+    fi
+  '
+
+  run_command "Создание директории для Outline" bash -c '
     mkdir -p "$SHADOWBOX_DIR"
-    chmod u+s,ug+rwx,o-rwx "$SHADOWBOX_DIR"
-  else
-    log_info "Директория для Outline уже существует."
-  fi
+    chmod 700 "$SHADOWBOX_DIR"
+  '
 }
 
-# Функция настройки ICMP
 configure_icmp() {
-  log_info "Настройка ICMP..."
-  iptables -A INPUT -p icmp --icmp-type echo-request -j DROP
-  iptables -A OUTPUT -p icmp --icmp-type echo-reply -j DROP
-  log_info "ICMP успешно настроен."
+  run_command "Настройка ICMP" bash -c '
+    iptables -A INPUT -p icmp --icmp-type echo-request -j DROP
+    iptables -A OUTPUT -p icmp --icmp-type echo-reply -j DROP
+  '
 }
 
-# Функция изменения MTU
 adjust_mtu() {
-  log_info "Изменение MTU на $MTU_VALUE..."
-  ip link set dev $NAT_INTERFACE mtu $MTU_VALUE
-  log_info "MTU успешно изменен."
+  run_command "Изменение MTU на $MTU_VALUE" bash -c '
+    ip link set dev $NAT_INTERFACE mtu $MTU_VALUE
+  '
 }
 
-# Функция настройки NAT
 configure_nat() {
-  log_info "Настройка NAT..."
-  iptables -t nat -A POSTROUTING -o $NAT_INTERFACE -j MASQUERADE
-  log_info "NAT успешно настроен."
+  run_command "Настройка NAT" bash -c '
+    iptables -t nat -A POSTROUTING -o $NAT_INTERFACE -j MASQUERADE
+  '
 }
 
-# Функция настройки TCP/UDP портов
 configure_ports() {
-  log_info "Настройка TCP/UDP портов..."
-  iptables -A INPUT -p tcp --dport $VPN_PORT -j ACCEPT
-  iptables -A INPUT -p udp --dport $VPN_PORT -j ACCEPT
-  iptables -A INPUT -p tcp --dport $OBFUSCATION_PORT -j ACCEPT
-  iptables -A INPUT -p udp --dport $OBFUSCATION_PORT -j ACCEPT
-  log_info "Порты $VPN_PORT и $OBFUSCATION_PORT успешно настроены."
+  run_command "Настройка портов $VPN_PORT и $OBFUSCATION_PORT" bash -c '
+    iptables -A INPUT -p tcp --dport $VPN_PORT -j ACCEPT
+    iptables -A INPUT -p udp --dport $VPN_PORT -j ACCEPT
+    iptables -A INPUT -p tcp --dport $OBFUSCATION_PORT -j ACCEPT
+    iptables -A INPUT -p udp --dport $OBFUSCATION_PORT -j ACCEPT
+  '
 }
 
-# Функция установки Outline VPN и обфускации
 install_outline_vpn() {
-  log_info "Установка Outline VPN..."
+  run_command "Установка Outline VPN" bash -c '
+    docker run -d --name shadowbox --restart always \
+      --net host \
+      -e "SB_API_PORT=$VPN_PORT" \
+      -e "SB_CERTIFICATE_FILE=/etc/shadowbox-selfsigned.crt" \
+      -e "SB_PRIVATE_KEY_FILE=/etc/shadowbox-selfsigned.key" \
+      -v "$SHADOWBOX_DIR:/opt/outline" \
+      "$DOCKER_IMAGE"
+  '
 
-  docker run -d --name shadowbox --restart always \
-    --net host \
-    -e "SB_API_PORT=$VPN_PORT" \
-    -e "SB_CERTIFICATE_FILE=/etc/shadowbox-selfsigned.crt" \
-    -e "SB_PRIVATE_KEY_FILE=/etc/shadowbox-selfsigned.key" \
-    -v "$SHADOWBOX_DIR:/opt/outline" \
-    "$DOCKER_IMAGE"
-
-  log_info "Outline VPN установлен."
-
-  log_info "Запуск Obfsproxy в Docker-контейнере..."
-  docker run -d --name obfsproxy \
-    -p $OBFUSCATION_PORT:$OBFUSCATION_PORT \
-    quay.io/outline/obfsproxy obfs3 --dest=127.0.0.1:$VPN_PORT server --listen=0.0.0.0:$OBFUSCATION_PORT
-
-  if docker ps | grep -q obfsproxy; then
-    log_info "Obfsproxy успешно запущен в Docker."
-  else
-    log_error "Ошибка запуска Obfsproxy. Проверьте настройки."
-  fi
+  run_command "Установка Obfsproxy в Docker" bash -c '
+    docker run -d --name obfsproxy \
+      -p $OBFUSCATION_PORT:$OBFUSCATION_PORT \
+      quay.io/outline/obfsproxy obfs3 --dest=127.0.0.1:$VPN_PORT server --listen=0.0.0.0:$OBFUSCATION_PORT
+  '
 }
 
-# Функция настройки шифрования
 setup_encryption_headers() {
-  log_info "Настройка шифрования..."
-  CERT_SHA256=$(openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-    -keyout /etc/shadowbox-selfsigned.key \
-    -out /etc/shadowbox-selfsigned.crt \
-    -subj "/CN=OutlineVPN" && \
-    openssl x509 -in /etc/shadowbox-selfsigned.crt -noout -sha256 -fingerprint | awk -F= '{print $2}' | sed 's/://g')
-  log_info "Шифрование успешно настроено."
+  run_command "Настройка шифрования" bash -c '
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+      -keyout /etc/shadowbox-selfsigned.key \
+      -out /etc/shadowbox-selfsigned.crt \
+      -subj "/CN=OutlineVPN"
+  '
 }
 
-# Функция тестирования результатов
 test_configuration() {
-  log_info "Тестирование конфигурации..."
-
-  if docker ps | grep -q shadowbox; then
-    log_info "Сервер Outline работает корректно."
-  else
-    log_error "Ошибка запуска сервера Outline. Проверьте логи Docker."
-  fi
-
-  log_info "Для тестирования вручную выполните следующие команды:"
-  echo -e "${YELLOW}curl -k https://<ваш IP>:443${NC}"
-  echo -e "${YELLOW}docker logs obfsproxy${NC}"
+  run_command "Тестирование конфигурации" bash -c '
+    if ! docker ps | grep -q shadowbox; then
+      echo "Ошибка запуска сервера Outline. Проверьте логи Docker."
+      exit 1
+    fi
+  '
 }
 
-# Функция вывода строки для Outline Manager
 output_outline_manager_config() {
-  log_info "Генерация строки для Outline Manager..."
-  API_URL="https://$(curl -s https://icanhazip.com):$VPN_PORT/oaUAMa0vlr0ev57n9MmQsA"
-  echo -e "${GREEN}{\"apiUrl\":\"$API_URL\",\"certSha256\":\"$CERT_SHA256\"}${NC}"
+  run_command "Генерация строки для Outline Manager" bash -c '
+    API_URL="https://$(curl -s https://icanhazip.com):$VPN_PORT/oaUAMa0vlr0ev57n9MmQsA"
+    echo "{\"apiUrl\":\"$API_URL\",\"certSha256\":\"$CERT_SHA256\"}"
+  '
 }
 
-# Основная функция
 main() {
   prepare_environment
   configure_icmp
@@ -166,7 +173,7 @@ main() {
   test_configuration
   output_outline_manager_config
 
-  log_info "Конфигурация завершена."
+  log_success "Конфигурация завершена."
 }
 
 main
