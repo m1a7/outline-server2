@@ -2,6 +2,22 @@
 
 echo "ОСТОРОЖНО! Удаляем все установленные компоненты Outline + Shadowsocks."
 
+# 2. Удаляем Nginx
+apt-get remove -y nginx
+apt-get autoremove -y
+
+# 3. Удаляем Docker (ОСТОРОЖНО, если Docker не нужен больше нигде):
+# apt-get remove -y docker docker.io
+# apt-get autoremove -y
+
+# 4. Удаляем сертификаты
+rm -rf /etc/nginx/ssl
+
+
+# 6. Удаляем symlink конфигурации Nginx
+rm -f /etc/nginx/sites-enabled/outline
+rm -f /etc/nginx/sites-available/outline
+
 # 1. Останавливаем и удаляем контейнеры
 docker stop shadowbox watchtower shadowsocks-obfs || true
 docker rm -f shadowbox watchtower shadowsocks-obfs || true
