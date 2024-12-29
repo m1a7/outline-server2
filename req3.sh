@@ -66,6 +66,17 @@ run_command() {
 }
 
 # ============================= НАСТРОЙКА ГЛОБАЛЬНЫХ ПЕРЕМЕННЫХ ==================
+echo "Отключение IPv6 временно..."
+
+# Временное отключение IPv6
+sysctl -w net.ipv6.conf.all.disable_ipv6=1
+sysctl -w net.ipv6.conf.default.disable_ipv6=1
+
+# Проверка отключения
+echo "Проверка отключения IPv6..."
+ip a | grep inet6
+echo "IPv6 отключен временно."
+
 # Порт, на котором будет работать Outline (Manager API). Требование: порт 443.
 OUTLINE_API_PORT=443
 
@@ -330,6 +341,21 @@ run_command "Проверка, что порт 443 доступен извне" 
     exit 1
   fi
 '
+
+# Если требуется постоянное отключение, добавляем изменения в /etc/sysctl.conf
+echo "Отключение IPv6 на постоянной основе..."
+if ! grep -q "disable_ipv6" /etc/sysctl.conf; then
+    echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.conf
+    echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
+    sysctl -p
+    echo "IPv6 отключен на постоянной основе."
+else
+    echo "Постоянное отключение IPv6 уже настроено."
+fi
+
+# Проверка использования порта
+echo "Проверка использования порта 58443..."
+lsof -i :58443
 
 # ============================= 15. УСТАНОВКА OBFS4PROXY =========================
 run_command "Установка obfs4proxy" bash -c '
