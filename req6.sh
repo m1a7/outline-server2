@@ -109,10 +109,16 @@ install_outline_vpn() {
 
   log_info "Outline VPN установлен."
 
-  log_info "Установка Obfsproxy для обфускации трафика..."
-  apt-get update && apt-get install -y obfsproxy
-  obfsproxy obfs3 --dest=127.0.0.1:$VPN_PORT server --listen=0.0.0.0:$OBFUSCATION_PORT &
-  log_info "Obfsproxy успешно настроен."
+  log_info "Запуск Obfsproxy в Docker-контейнере..."
+  docker run -d --name obfsproxy \
+    -p $OBFUSCATION_PORT:$OBFUSCATION_PORT \
+    quay.io/outline/obfsproxy obfs3 --dest=127.0.0.1:$VPN_PORT server --listen=0.0.0.0:$OBFUSCATION_PORT
+
+  if docker ps | grep -q obfsproxy; then
+    log_info "Obfsproxy успешно запущен в Docker."
+  else
+    log_error "Ошибка запуска Obfsproxy. Проверьте настройки."
+  fi
 }
 
 # Функция настройки шифрования
@@ -138,7 +144,7 @@ test_configuration() {
 
   log_info "Для тестирования вручную выполните следующие команды:"
   echo -e "${YELLOW}curl -k https://<ваш IP>:443${NC}"
-  echo -e "${YELLOW}obfsproxy obfs3 client <ваш IP>:$OBFUSCATION_PORT <local_port>${NC}"
+  echo -e "${YELLOW}docker logs obfsproxy${NC}"
 }
 
 # Функция вывода строки для Outline Manager
