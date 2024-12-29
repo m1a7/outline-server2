@@ -342,6 +342,16 @@ run_command "Проверка, что порт 443 доступен извне" 
   fi
 '
 
+# ============================= 15. УСТАНОВКА OBFS4PROXY =========================
+run_command "Установка obfs4proxy" bash -c '
+  apt-get update -y && apt-get install -y obfs4proxy
+  if [[ $? -eq 0 ]]; then
+    echo "obfs4proxy установлен."
+  else
+    echo "Не удалось установить obfs4proxy."
+    exit 1
+  fi
+'
 # Если требуется постоянное отключение, добавляем изменения в /etc/sysctl.conf
 echo "Отключение IPv6 на постоянной основе..."
 if ! grep -q "disable_ipv6" /etc/sysctl.conf; then
@@ -355,18 +365,7 @@ fi
 
 # Проверка использования порта
 echo "Проверка использования порта 58443..."
-lsof -i :58443
-
-# ============================= 15. УСТАНОВКА OBFS4PROXY =========================
-run_command "Установка obfs4proxy" bash -c '
-  apt-get update -y && apt-get install -y obfs4proxy
-  if [[ $? -eq 0 ]]; then
-    echo "obfs4proxy установлен."
-  else
-    echo "Не удалось установить obfs4proxy."
-    exit 1
-  fi
-'
+lsof -i :8443
 
 # ============================= 16. ЗАПУСК SHADOWSOCKS + OBFS4 ===================
 run_command "Запуск контейнера Shadowsocks с obfs4 (пример)" bash -c '
@@ -377,7 +376,7 @@ run_command "Запуск контейнера Shadowsocks с obfs4 (приме�
   docker run -d \
     --name shadowsocks-obfs \
     --restart always \
-    -p 58443:58443 \
+    -p 8443:8443 \
     -e "SERVER_ADDR=0.0.0.0" \
     -e "PASSWORD=MySecretPassword" \
     -e "METHOD=aes-256-gcm" \
