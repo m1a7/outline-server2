@@ -70,7 +70,7 @@ run_command() {
 OUTLINE_API_PORT=443
 
 # Порт для Shadowsocks + obfs4 (тоже 443, чтобы весь трафик шёл через 443).
-SHADOWSOCKS_PORT=443
+SHADOWSOCKS_PORT=8443
 
 # Название Docker-контейнера Outline
 OUTLINE_CONTAINER_NAME="shadowbox"
@@ -342,7 +342,7 @@ run_command "Запуск контейнера Shadowsocks с obfs4 (приме�
   docker run -d \
     --name shadowsocks-obfs \
     --restart always \
-    -p 443:443 \
+    -p 8443:8443 \
     -e "SERVER_ADDR=0.0.0.0" \
     -e "PASSWORD=MySecretPassword" \
     -e "METHOD=aes-256-gcm" \
