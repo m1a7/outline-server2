@@ -5,8 +5,77 @@ CHAT-GPT, YOUR TASK:
 Configure a private VPN using Outline running inside Docker.  
 You should make every effort to ensure that the script configures the server in such a way that external websites cannot detect the use of a VPN.  
 (As far as I know, this can be achieved through approaches such as:  
-Traffic obfuscation, using the HTTPS port, TLS/SSL tunneling, and implementing methods to bypass DPI (Deep Packet Inspection)).  
+Traffic obfuscation, TLS/SSL tunneling.  
 Analyze independently which approaches and technologies we can incorporate into this script.
+Think carefully about which technologists should use which connection ports (to prevent the program from crashing. you need to ensure a reliable connection).
+TLS/SSL Tunneling should work in conjunction with Nginx:
+
+"""
+#!/bin/bash
+
+# ======================== УСТАНОВКА И НАСТРОЙКА NGINX ==========================
+apt-get update -y
+apt-get install -y nginx
+
+# Создаем директорию для SSL-сертификатов
+mkdir -p /etc/nginx/ssl
+
+# Генерация самоподписанного сертификата (замените на Let's Encrypt, если требуется)
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/nginx/ssl/nginx.key \
+  -out /etc/nginx/ssl/nginx.crt \
+  -subj "/CN=your-domain.com"
+
+# Настройка Nginx для обратного прокси с TLS/SSL
+cat <<EOL > /etc/nginx/sites-available/outline
+server {
+    listen 443 ssl;
+    server_name your-domain.com;
+
+    ssl_certificate /etc/nginx/ssl/nginx.crt;
+    ssl_certificate_key /etc/nginx/ssl/nginx.key;
+
+    location / {
+        proxy_pass http://127.0.0.1:5000;  # Внутренний порт Outline
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOL
+
+# Активируем конфигурацию Nginx
+ln -s /etc/nginx/sites-available/outline /etc/nginx/sites-enabled/
+nginx -t
+systemctl restart nginx
+
+# ======================== НАСТРОЙКА OUTLINE НА ВНУТРЕННИЙ ПОРТ ========================
+OUTLINE_API_PORT=5000
+
+# Запуск контейнера Outline на внутреннем порту (127.0.0.1)
+docker run -d --name outline-server \
+  -p 127.0.0.1:${OUTLINE_API_PORT}:5000 \
+  -e "SB_API_PREFIX=api" \
+  -e "SB_METRICS_PORT=9090" \
+  -e "SB_PRIVATE_KEY_FILE=/path/to/private.key" \
+  -e "SB_CERTIFICATE_FILE=/path/to/certificate.crt" \
+  outline-server-image:latest
+
+# ======================== ОБНОВЛЕНИЕ НАСТРОЕК БРАНДМАУЭРА ========================
+ufw allow 443
+ufw reload
+
+# ======================== ВЫВОД ИНФОРМАЦИИ О НАСТРОЙКЕ ========================
+echo "Nginx настроен для работы с TLS/SSL на порту 443."
+echo "Outline доступен через https://your-domain.com."
+echo "Обратите внимание: замените your-domain.com на ваш реальный домен."
+"""
+
+
 
 I’ve also heard that third-party websites can detect my use of a VPN by analyzing bidirectional ping responses. Please add the appropriate configurations to the bash script to prevent such detection.
 
@@ -36,6 +105,8 @@ Script and Log Formatting Requirements:
 3. Use the echo command for logging.
 4. All logs must be color-coded to make it easier for the user to distinguish successfully completed processes from others.
 5. After configuring all necessary components, the script must print all generated keys, passwords, and configuration strings (e.g., the string for Outline Manager like: {"apiUrl":"https://128.199.56.243:443/oaUAMa0vlr0ev57n9MmQsA","certSha256:88227EE7EAB773D11066E7B2BBB33BD57148D5FB476BEF87F874FAE8D03C6E54"}).
+
+
 
 Script Construction Principles:
 1. Before starting the main work, the script must perform all necessary preparations and checks.
@@ -128,19 +199,10 @@ run_command() {
 
 # ============================= НАСТРОЙКА ГЛОБАЛЬНЫХ ПЕРЕМЕННЫХ ==================
 # Порт, на котором будет работать Outline (Manager API). Требование: порт 443.
-OUTLINE_API_PORT=443
+OUTLINE_API_PORT=8443
 
 # Порт для Shadowsocks + obfs4 (тоже 443, чтобы весь трафик шёл через 443).
-SHADOWSOCKS_PORT=58443
-
-echo "Используемый порт для Shadowsocks: ${SHADOWSOCKS_PORT}"
-
-if lsof -i :${SHADOWSOCKS_PORT}; then
-    echo "Ошибка: Порт ${SHADOWSOCKS_PORT} уже используется. Завершение работы."
-    exit 1
-else
-    echo "Порт ${SHADOWSOCKS_PORT} свободен. Продолжаем выполнение."
-fi
+SHADOWSOCKS_PORT=443
 
 # Название Docker-контейнера Outline
 OUTLINE_CONTAINER_NAME="shadowbox"
@@ -377,7 +439,7 @@ run_command "Создание первого пользователя Outline" b
 # ============================= 13. ДОБАВЛЕНИЕ API-URL В CONFIG ==================
 run_command "Добавление API URL в $ACCESS_CONFIG" bash -c '
   mkdir -p "'"$SHADOWBOX_DIR"'"
-  echo "apiUrl:https://'"$PUBLIC_HOSTNAME"':'"$OUTLINE_API_PORT"'/'"$SB_API_PREFIX"'" >> "'"$ACCESS_CONFIG"'"
+  echo -e "\033[1;32m{\"apiUrl\":\"https://${PUBLIC_HOSTNAME}:${OUTLINE_API_PORT}/${SB_API_PREFIX}\"}\033[0m" >> "$ACCESS_CONFIG"
   echo "certSha256:'"$CERT_SHA256"'" >> "'"$ACCESS_CONFIG"'"
   echo "Добавлены строки apiUrl и certSha256 в $ACCESS_CONFIG"
 '
@@ -405,14 +467,14 @@ run_command "Установка obfs4proxy" bash -c '
 
 # ============================= 16. ЗАПУСК SHADOWSOCKS + OBFS4 ===================
 run_command "Запуск контейнера Shadowsocks с obfs4 (пример)" bash -c '
-  SHADOWSOCKS_IMAGE="chenhw2/ss-obfs:latest"
+  SHADOWSOCKS_IMAGE="hlandau/ss-obfs:latest"
   docker stop shadowsocks-obfs &>/dev/null || true
   docker rm -f shadowsocks-obfs &>/dev/null || true
 
   docker run -d \
     --name shadowsocks-obfs \
     --restart always \
-    -p 58443:58443 \
+    -p 443:443 \
     -e "SERVER_ADDR=0.0.0.0" \
     -e "PASSWORD=MySecretPassword" \
     -e "METHOD=aes-256-gcm" \
@@ -517,4 +579,4 @@ rm -rf /opt/outline
 #   ip6tables -D OUTPUT -p icmpv6 --icmpv6-type echo-reply -j DROP
 
 echo "Удаление завершено."
-HIDDEN_REMOVE_BLOCK  
+HIDDEN_REMOVE_BLOCK

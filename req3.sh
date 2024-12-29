@@ -66,35 +66,11 @@ run_command() {
 }
 
 # ============================= НАСТРОЙКА ГЛОБАЛЬНЫХ ПЕРЕМЕННЫХ ==================
-echo "Отключение IPv6 временно..."
-
-# Временное отключение IPv6
-sysctl -w net.ipv6.conf.all.disable_ipv6=1
-sysctl -w net.ipv6.conf.default.disable_ipv6=1
-
-# Проверка отключения
-echo "Проверка отключения IPv6..."
-ip a | grep inet6
-echo "IPv6 отключен временно."
-
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
-sudo ufw enable
-
 # Порт, на котором будет работать Outline (Manager API). Требование: порт 443.
-OUTLINE_API_PORT=1443
+OUTLINE_API_PORT=8443
 
 # Порт для Shadowsocks + obfs4 (тоже 443, чтобы весь трафик шёл через 443).
-SHADOWSOCKS_PORT=58443
-
-echo "Используемый порт для Shadowsocks: ${SHADOWSOCKS_PORT}"
-
-if lsof -i :${SHADOWSOCKS_PORT}; then
-    echo "Ошибка: Порт ${SHADOWSOCKS_PORT} уже используется. Завершение работы."
-    exit 1
-else
-    echo "Порт ${SHADOWSOCKS_PORT} свободен. Продолжаем выполнение."
-fi
+SHADOWSOCKS_PORT=443
 
 # Название Docker-контейнера Outline
 OUTLINE_CONTAINER_NAME="shadowbox"
@@ -331,17 +307,17 @@ run_command "Создание первого пользователя Outline" b
 # ============================= 13. ДОБАВЛЕНИЕ API-URL В CONFIG ==================
 run_command "Добавление API URL в $ACCESS_CONFIG" bash -c '
   mkdir -p "'"$SHADOWBOX_DIR"'"
-  echo "apiUrl:https://'"$PUBLIC_HOSTNAME"':'"$OUTLINE_API_PORT"'/'"$SB_API_PREFIX"'" >> "'"$ACCESS_CONFIG"'"
+  echo -e "\033[1;32m{\"apiUrl\":\"https://${PUBLIC_HOSTNAME}:${OUTLINE_API_PORT}/${SB_API_PREFIX}\"}\033[0m" >> "$ACCESS_CONFIG"
   echo "certSha256:'"$CERT_SHA256"'" >> "'"$ACCESS_CONFIG"'"
   echo "Добавлены строки apiUrl и certSha256 в $ACCESS_CONFIG"
 '
 
 # ============================= 14. ПРОВЕРКА ФАЕРВОЛА ХОСТА ======================
-run_command "Проверка, что порт 1443 доступен извне" bash -c '
+run_command "Проверка, что порт 443 доступен извне" bash -c '
   if curl --silent --fail --cacert "'"$SB_CERTIFICATE_FILE"'" --max-time 5 "https://'"$PUBLIC_HOSTNAME"':'"$OUTLINE_API_PORT"'/'"$SB_API_PREFIX"'/access-keys" >/dev/null; then
-    echo "Порт 1443 кажется доступен снаружи."
+    echo "Порт 443 кажется доступен снаружи."
   else
-    echo "Порт 1443 может быть заблокирован фаерволом. Проверьте настройки!"
+    echo "Порт 443 может быть заблокирован фаерволом. Проверьте настройки!"
     exit 1
   fi
 '
@@ -356,31 +332,17 @@ run_command "Установка obfs4proxy" bash -c '
     exit 1
   fi
 '
-# Если требуется постоянное отключение, добавляем изменения в /etc/sysctl.conf
-echo "Отключение IPv6 на постоянной основе..."
-if ! grep -q "disable_ipv6" /etc/sysctl.conf; then
-    echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.conf
-    echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
-    sysctl -p
-    echo "IPv6 отключен на постоянной основе."
-else
-    echo "Постоянное отключение IPv6 уже настроено."
-fi
-
-# Проверка использования порта
-echo "Проверка использования порта 58443..."
-lsof -i :8443
 
 # ============================= 16. ЗАПУСК SHADOWSOCKS + OBFS4 ===================
 run_command "Запуск контейнера Shadowsocks с obfs4 (пример)" bash -c '
-  SHADOWSOCKS_IMAGE="chenhw2/ss-obfs:latest"
+  SHADOWSOCKS_IMAGE="hlandau/ss-obfs:latest"
   docker stop shadowsocks-obfs &>/dev/null || true
   docker rm -f shadowsocks-obfs &>/dev/null || true
 
   docker run -d \
     --name shadowsocks-obfs \
     --restart always \
-    -p 8443:8443 \
+    -p 443:443 \
     -e "SERVER_ADDR=0.0.0.0" \
     -e "PASSWORD=MySecretPassword" \
     -e "METHOD=aes-256-gcm" \
