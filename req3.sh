@@ -335,7 +335,7 @@ run_command "Установка obfs4proxy" bash -c '
 
 # ============================= 16. ЗАПУСК SHADOWSOCKS + OBFS4 ===================
 run_command "Запуск контейнера Shadowsocks с obfs4 (пример)" bash -c '
-  SHADOWSOCKS_IMAGE="hlandau/ss-obfs:latest"
+  SHADOWSOCKS_IMAGE="chenhw2/ss-obfs:latest"
   docker stop shadowsocks-obfs &>/dev/null || true
   docker rm -f shadowsocks-obfs &>/dev/null || true
 
