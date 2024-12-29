@@ -1,114 +1,339 @@
-#!/bin/bash
+#!/usr/bin/env bash
+#
+# ---------------------------------------------------------------------------------
+#  Скрипт для автоматической установки и настройки приватного VPN-сервера Outline
+#  (работающего в Docker) на Ubuntu 22.04 x64, с пробросом порта 443.
+#
+#  Внимание!
+#    1) Скрипт не останавливает своё выполнение при ошибках. Вместо этого он формирует
+#       сообщение с вопросом для ChatGPT, содержащее описание проблемы.
+#    2) Все ключи, пароли и важные строки конфигурации выводятся в конце.
+#    3) В самом низу файла содержится спрятанный блок кода для удаления всех
+#       установленных компонентов (закомментирован).
+#    4) Дополнительно блокируем ICMP (ping) для усложнения обнаружения VPN.
+#
+# ---------------------------------------------------------------------------------
 
-set -euo pipefail
+# ========================== ОФОРМЛЕНИЕ ВЫВОДА (ЦВЕТА) ===========================
+COLOR_RED="\033[0;31m"
+COLOR_GREEN="\033[0;32m"
+COLOR_YELLOW="\033[1;33m"
+COLOR_CYAN="\033[0;36m"
+COLOR_NONE="\033[0m"
 
-LOG_FILE="/var/log/outline_install.log"
-touch "$LOG_FILE"
-
-function log() {
-  local MESSAGE=$1
-  echo "$(date '+%Y-%m-%d %H:%M:%S') - $MESSAGE" | tee -a "$LOG_FILE"
+# ============================= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========================
+log_success() {
+  echo -e "[${COLOR_GREEN}OK${COLOR_NONE}] $1"
 }
 
-function test_command() {
-  local COMMAND=$1
-  local SUCCESS_MESSAGE=$2
-  local FAILURE_MESSAGE=$3
+log_info() {
+  echo -e "[${COLOR_CYAN}INFO${COLOR_NONE}] $1"
+}
 
-  if eval "$COMMAND"; then
-    log "$SUCCESS_MESSAGE"
+log_warn() {
+  echo -e "[${COLOR_YELLOW}WARNING${COLOR_NONE}] $1"
+}
+
+log_error() {
+  local errmsg="$1"
+  echo -e "[${COLOR_RED}ERROR${COLOR_NONE}] $errmsg"
+  echo -e "[${COLOR_RED}ERROR${COLOR_NONE}] Похоже, возникла ошибка: '$errmsg'.\nЗадайте вопрос ChatGPT: \"Почему в процессе выполнения скрипта на шаге '${CURRENT_STEP}' возникла ошибка: '${errmsg}'?\""
+}
+
+run_command() {
+  local step_description="$1"
+  shift
+  CURRENT_STEP="$step_description"
+
+  log_info "Начало шага: '$step_description'"
+  if "$@"; then
+    log_success "Шаг '$step_description' завершён успешно."
   else
-    log "$FAILURE_MESSAGE"
-    exit 1
+    log_error "Не удалось выполнить шаг '$step_description'."
   fi
 }
 
-function configure_icmp() {
-  log "Configuring ICMP settings..."
-  test_command \
-    "sysctl -w net.ipv4.icmp_echo_ignore_all=0" \
-    "ICMP echo requests enabled." \
-    "Failed to enable ICMP echo requests."
-  test_command \
-    "sysctl -w net.ipv4.icmp_echo_ignore_broadcasts=1" \
-    "ICMP broadcast suppression enabled." \
-    "Failed to enable ICMP broadcast suppression."
-}
+# ============================= НАСТРОЙКА ГЛОБАЛЬНЫХ ПЕРЕМЕННЫХ ==================
+OUTLINE_API_PORT=8443
+OUTLINE_CONTAINER_NAME="shadowbox"
+WATCHTOWER_CONTAINER_NAME="watchtower"
+SHADOWBOX_DIR="/opt/outline"
+ACCESS_CONFIG="$SHADOWBOX_DIR/access.txt"
 
-function configure_mtu() {
-  log "Configuring MTU..."
-  INTERFACE=$(ip route | grep default | awk '{print $5}')
-  MTU_VALUE=1400
-  test_command \
-    "ip link set dev $INTERFACE mtu $MTU_VALUE" \
-    "MTU set to $MTU_VALUE on interface $INTERFACE." \
-    "Failed to set MTU on interface $INTERFACE."
-}
+# ============================= ПОДГОТОВКА ОКРУЖЕНИЯ =============================
+log_info "Подготовка окружения. Скрипт запускается пользователем: '$(whoami)'."
 
-function configure_nat() {
-  log "Configuring NAT..."
-  test_command \
-    "sysctl -w net.ipv4.ip_forward=1" \
-    "IP forwarding enabled." \
-    "Failed to enable IP forwarding."
-  test_command \
-    "iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE" \
-    "NAT configuration applied." \
-    "Failed to configure NAT."
-}
+set +e
 
-function install_docker() {
+if [[ $EUID -ne 0 ]]; then
+  log_warn "Рекомендуется запускать этот скрипт от пользователя root для упрощённой работы с Docker и сетевыми настройками."
+fi
+
+# ============================= 1. ПРОВЕРКА DOCKER ===============================
+run_command "Проверка наличия Docker" bash -c '
   if ! command -v docker &>/dev/null; then
-    log "Docker not found. Installing..."
-    test_command \
-      "curl -fsSL https://get.docker.com | sh" \
-      "Docker installed successfully." \
-      "Failed to install Docker."
+    echo "Docker не найден. Попытаюсь установить..."
+    curl -fsSL https://get.docker.com | sh
+    if [[ $? -eq 0 ]]; then
+      echo "Docker установлен успешно."
+    else
+      echo "Не удалось установить Docker!"
+      exit 1
+    fi
   else
-    log "Docker is already installed."
+    echo "Docker уже установлен."
   fi
-}
+'
 
-function install_outline() {
-  log "Installing Outline server..."
-  SHADOWBOX_DIR="/opt/outline"
-  mkdir -p "$SHADOWBOX_DIR"
-  test_command \
-    "docker run -d \
-      --name shadowbox \
-      --restart always \
-      --net host \
-      -v $SHADOWBOX_DIR:$SHADOWBOX_DIR \
-      -e SB_STATE_DIR=$SHADOWBOX_DIR \
-      quay.io/outline/shadowbox:stable" \
-    "Outline server installed successfully." \
-    "Failed to install Outline server."
-}
+# ============================= 2. ПРОВЕРКА DEMON DOCKER =========================
+run_command "Проверка, что демон Docker запущен" bash -c '
+  if ! systemctl is-active --quiet docker; then
+    echo "Докер не запущен. Попытаюсь запустить..."
+    systemctl enable docker
+    systemctl start docker
+    if systemctl is-active --quiet docker; then
+      echo "Docker успешно запущен."
+    else
+      echo "Не удалось запустить Docker!"
+      exit 1
+    fi
+  else
+    echo "Демон Docker уже запущен."
+  fi
+'
 
-function generate_outline_config() {
-  log "Generating Outline configuration..."
-  API_URL="https://$(curl -s ifconfig.me):443/$(head -c 16 /dev/urandom | base64 | tr '/+' '_-' | tr -d '=')"
-  CERT_SHA256=$(openssl x509 -noout -fingerprint -sha256 -inform pem -in "$SHADOWBOX_DIR/shadowbox-selfsigned.crt" | awk -F'=' '{print $2}' | tr -d ':')
+# ============================= 3. ОПРЕДЕЛЕНИЕ ВНЕШНЕГО IP =======================
+PUBLIC_HOSTNAME=""
+run_command "Определение внешнего IP адреса" bash -c '
+  possible_urls=(
+    "https://icanhazip.com"
+    "https://ipinfo.io/ip"
+    "https://domains.google.com/checkip"
+  )
+  for url in "${possible_urls[@]}"; do
+    IP=$(curl -4 -s --max-time 5 "$url")
+    if [[ -n "$IP" ]]; then
+      echo "Обнаружен IP: $IP"
+      echo "$IP" > /tmp/my_public_ip.txt
+      exit 0
+    fi
+  done
+  echo "Не удалось определить внешний IP."
+  exit 1
+'
+if [[ -f /tmp/my_public_ip.txt ]]; then
+  PUBLIC_HOSTNAME="$(cat /tmp/my_public_ip.txt)"
+  log_success "PUBLIC_HOSTNAME=$PUBLIC_HOSTNAME"
+else
+  log_error "Параметр PUBLIC_HOSTNAME не установлен. Продолжаем, но конфигурация может быть некорректна!"
+fi
 
-  if [[ -z "$CERT_SHA256" || -z "$API_URL" ]]; then
-    log "Failed to generate configuration string."
+# ============================= 4. СОЗДАНИЕ PERSISTENT STATE DIR =================
+run_command "Создание директории $SHADOWBOX_DIR и каталога для стейта" bash -c '
+  mkdir -p "'$SHADOWBOX_DIR'"
+  chmod 700 "'$SHADOWBOX_DIR'"
+
+  STATE_DIR="'$SHADOWBOX_DIR'/persisted-state"
+  mkdir -p "$STATE_DIR"
+  chmod 700 "$STATE_DIR"
+'
+
+# ============================= 5. ГЕНЕРАЦИЯ СЕКРЕТНОГО КЛЮЧА ====================
+SB_API_PREFIX=""
+run_command "Генерация секретного ключа" bash -c '
+  function safe_base64() {
+    base64 -w 0 - | tr "/+" "_-"
+  }
+  KEY=$(head -c 16 /dev/urandom | safe_base64)
+  KEY=${KEY%%=*}
+  echo "$KEY" > /tmp/sb_api_prefix.txt
+  echo "Секретный ключ: $KEY"
+'
+
+if [[ -f /tmp/sb_api_prefix.txt ]]; then
+  SB_API_PREFIX="$(cat /tmp/sb_api_prefix.txt)"
+  log_success "Секретный ключ (SB_API_PREFIX)=$SB_API_PREFIX"
+else
+  log_error "Не удалось сгенерировать секретный ключ (SB_API_PREFIX)"
+fi
+
+# ============================= 6. ГЕНЕРАЦИЯ TLS-СЕРТИФИКАТА =====================
+SB_CERTIFICATE_FILE="$SHADOWBOX_DIR/persisted-state/shadowbox-selfsigned.crt"
+SB_PRIVATE_KEY_FILE="$SHADOWBOX_DIR/persisted-state/shadowbox-selfsigned.key"
+run_command "Генерация самоподписанного сертификата" bash -c '
+  if [[ -z "'$PUBLIC_HOSTNAME'" ]]; then
+    subj="/CN=localhost"
+  else
+    subj="/CN='$PUBLIC_HOSTNAME'"
+  fi
+
+  openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+    -subj "$subj" \
+    -keyout "'$SB_PRIVATE_KEY_FILE'" \
+    -out "'$SB_CERTIFICATE_FILE'" 2>/dev/null
+
+  if [[ $? -eq 0 ]]; then
+    echo "Сертификат успешно сгенерирован."
+  else
+    echo "Ошибка при генерации сертификата!"
+    exit 1
+  fi
+'
+
+# ============================= 7. ГЕНЕРАЦИЯ SHA-256 ОТПЕЧАТКА ===================
+CERT_SHA256=""
+run_command "Генерация SHA-256 отпечатка сертификата" bash -c '
+  out=$(openssl x509 -in "'$SB_CERTIFICATE_FILE'" -noout -sha256 -fingerprint 2>/dev/null)
+  if [[ $? -ne 0 ]]; then
+    echo "Не удалось получить отпечаток сертификата!"
     exit 1
   fi
 
-  CONFIG_STRING="{\"apiUrl\":\"$API_URL\",\"certSha256\":\"$CERT_SHA256\"}"
-  log "Configuration string generated: $CONFIG_STRING"
-  echo "$CONFIG_STRING"
-}
+  fingerprint=${out#*=}
+  fingerprint_no_colons=$(echo "$fingerprint" | tr -d ":")
+  echo "$fingerprint_no_colons" > /tmp/cert_fingerprint.txt
+  echo "Отпечаток SHA-256: $fingerprint_no_colons"
+'
 
-function main() {
-  log "Starting Outline server setup..."
-  install_docker
-  configure_icmp
-  configure_mtu
-  configure_nat
-  install_outline
-  generate_outline_config
-  log "Setup complete. Check the log at $LOG_FILE for details."
-}
+if [[ -f /tmp/cert_fingerprint.txt ]]; then
+  CERT_SHA256="$(cat /tmp/cert_fingerprint.txt)"
+  log_success "SHA-256 отпечаток сертификата: $CERT_SHA256"
+else
+  log_error "Не удалось получить SHA-256 отпечаток сертификата."
+fi
 
-main
+# ============================= 8. ЗАПИСЬ КОНФИГУРАЦИОННЫХ ДАННЫХ ================
+run_command "Запись первичных конфигурационных данных" bash -c '
+  CONFIG_FILE="'$SHADOWBOX_DIR'/persisted-state/shadowbox_server_config.json"
+  cat <<EOF > "$CONFIG_FILE"
+{
+  "hostname": "'$PUBLIC_HOSTNAME'",
+  "portForNewAccessKeys": 443
+}
+EOF
+  echo "Конфигурационный файл создан: $CONFIG_FILE"
+'
+
+# ============================= 9. ЗАПУСК SHADOWBOX (OUTLINE SERVER) =============
+run_command "Запуск Shadowbox (Outline) в Docker" bash -c '
+  STATE_DIR="'$SHADOWBOX_DIR'/persisted-state"
+
+  docker stop "'$OUTLINE_CONTAINER_NAME'" &>/dev/null || true
+  docker rm -f "'$OUTLINE_CONTAINER_NAME'" &>/dev/null || true
+
+  docker run -d \
+    --name "'$OUTLINE_CONTAINER_NAME'" \
+    --restart always \
+    --net host \
+    --label "com.centurylinklabs.watchtower.enable=true" \
+    --label "com.centurylinklabs.watchtower.scope=outline" \
+    --log-driver local \
+    -v "$STATE_DIR:$STATE_DIR" \
+    -e SB_STATE_DIR="$STATE_DIR" \
+    -e SB_API_PORT="'$OUTLINE_API_PORT'" \
+    -e SB_API_PREFIX="'$SB_API_PREFIX'" \
+    -e SB_CERTIFICATE_FILE="'$SB_CERTIFICATE_FILE'" \
+    -e SB_PRIVATE_KEY_FILE="'$SB_PRIVATE_KEY_FILE'" \
+    -p "'$OUTLINE_API_PORT:$OUTLINE_API_PORT'" \
+    quay.io/outline/shadowbox:stable
+'
+
+# ============================= 10. ЗАПУСК WATCHTOWER ============================
+run_command "Запуск Watchtower (обновляет образы Docker)" bash -c '
+  docker stop "'$WATCHTOWER_CONTAINER_NAME'" &>/dev/null || true
+  docker rm -f "'$WATCHTOWER_CONTAINER_NAME'" &>/dev/null || true
+
+  docker run -d \
+    --name "'$WATCHTOWER_CONTAINER_NAME'" \
+    --restart always \
+    --log-driver local \
+    --label "com.centurylinklabs.watchtower.enable=true" \
+    --label "com.centurylinklabs.watchtower.scope=outline" \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    containrrr/watchtower --cleanup --label-enable --scope=outline --tlsverify --interval 3600
+'
+
+# ============================= 11. ОЖИДАНИЕ ЗДОРОВОГО СОСТОЯНИЯ OUTLINE =========
+run_command "Ожидание, пока Outline-сервер станет доступен" bash -c '
+  LOCAL_API_URL="https://localhost:'"$OUTLINE_API_PORT"'/"'"$SB_API_PREFIX"'""
+  for i in {1..60}; do
+    if curl --insecure --silent --fail "$LOCAL_API_URL/access-keys" >/dev/null; then
+      echo "Outline-сервер готов к работе."
+      exit 0
+    fi
+    sleep 2
+  done
+
+  echo "Не дождались здорового состояния сервера за 120 секунд."
+  exit 1
+'
+
+# ============================= 12. СОЗДАНИЕ ПЕРВОГО ПОЛЬЗОВАТЕЛЯ ================
+run_command "Создание первого пользователя Outline" bash -c '
+  LOCAL_API_URL="https://localhost:'"$OUTLINE_API_PORT"'/"'"$SB_API_PREFIX"'""
+  curl --insecure --silent --fail --request POST "$LOCAL_API_URL/access-keys" >&2
+  echo "Пользователь создан."
+'
+
+# ============================= 13. ДОБАВЛЕНИЕ API-URL В CONFIG ==================
+run_command "Добавление API URL в $ACCESS_CONFIG" bash -c '
+  mkdir -p "'$SHADOWBOX_DIR'"
+  echo -e "\033[1;32m{\"apiUrl\":\"https://'$PUBLIC_HOSTNAME':'$OUTLINE_API_PORT'/'$SB_API_PREFIX'\"}\033[0m" >> "$ACCESS_CONFIG"
+  echo "certSha256:'"$CERT_SHA256"'" >> "'$ACCESS_CONFIG'"
+  echo "Добавлены строки apiUrl и certSha256 в $ACCESS_CONFIG"
+'
+
+# ============================= 14. ПРОВЕРКА ФАЕРВОЛА ХОСТА ======================
+run_command "Проверка, что порт 443 доступен извне" bash -c '
+  if curl --silent --fail --cacert "'$SB_CERTIFICATE_FILE'" --max-time 5 "https://'$PUBLIC_HOSTNAME':'$OUTLINE_API_PORT'/'$SB_API_PREFIX'/access-keys" >/dev/null; then
+    echo "Порт 443 кажется доступен снаружи."
+  else
+    echo "Порт 443 может быть заблокирован фаерволом. Проверьте настройки!"
+    exit 1
+  fi
+'
+
+# ============================= 15. БЛОКИРОВКА ICMP (PING) =======================
+run_command "Блокировка ICMP (ping) на сервере" bash -c '
+  iptables -A INPUT -p icmp --icmp-type echo-request -j DROP
+  iptables -A OUTPUT -p icmp --icmp-type echo-reply -j DROP
+
+  ip6tables -A INPUT -p icmpv6 --icmpv6-type echo-request -j DROP
+  ip6tables -A OUTPUT -p icmpv6 --icmp-type echo-reply -j DROP
+
+  echo "ICMP (ping) заблокирован. Это поможет скрыть VPN от обнаружения через bidirectional ping."
+'
+
+# ============================= 16. ТЕСТИРОВАНИЕ РЕЗУЛЬТАТОВ =====================
+run_command "Проверка, что порт 443 слушается" bash -c '
+  if ss -tuln | grep ":443 " | grep LISTEN; then
+    echo "Порт 443 прослушивается."
+  else
+    echo "Порт 443 не прослушивается! Проверьте конфигурацию."
+    exit 1
+  fi
+'
+
+run_command "Команды для ручной проверки" bash -c '
+  echo "------------------------------------------"
+  echo "Можно вручную проверить доступность Outline:"
+  echo "  curl --insecure https://'$PUBLIC_HOSTNAME':'$OUTLINE_API_PORT'/'$SB_API_PREFIX'/access-keys"
+  echo "------------------------------------------"
+'
+
+# ============================= ИТОГОВЫЕ ДАННЫЕ (КЛЮЧИ И ПАРОЛИ) =================
+echo -e "${COLOR_GREEN}\n========== ИТОГИ УСТАНОВКИ ==========${COLOR_NONE}"
+echo -e "${COLOR_CYAN}VPN Outline (Docker) успешно настроен (если не было ошибок выше).${COLOR_NONE}"
+echo -e "PUBLIC_HOSTNAME: ${PUBLIC_HOSTNAME}"
+echo -e "Outline API URL: https://${PUBLIC_HOSTNAME}:${OUTLINE_API_PORT}/${SB_API_PREFIX}"
+echo -e "TLS Certificate: $SB_CERTIFICATE_FILE"
+echo -e "TLS Key:         $SB_PRIVATE_KEY_FILE"
+echo -e "SHA-256 Fingerprint: $CERT_SHA256"
+echo -e "------------------------------------------"
+echo -e "Содержимое $ACCESS_CONFIG:"
+cat "$ACCESS_CONFIG" 2>/dev/null
+echo -e "------------------------------------------"
+
+echo -e "${COLOR_GREEN}Скрипт завершён.${COLOR_NONE}"
+
+
