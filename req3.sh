@@ -77,8 +77,12 @@ echo "Проверка отключения IPv6..."
 ip a | grep inet6
 echo "IPv6 отключен временно."
 
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw enable
+
 # Порт, на котором будет работать Outline (Manager API). Требование: порт 443.
-OUTLINE_API_PORT=443
+OUTLINE_API_PORT=1443
 
 # Порт для Shadowsocks + obfs4 (тоже 443, чтобы весь трафик шёл через 443).
 SHADOWSOCKS_PORT=58443
@@ -333,11 +337,11 @@ run_command "Добавление API URL в $ACCESS_CONFIG" bash -c '
 '
 
 # ============================= 14. ПРОВЕРКА ФАЕРВОЛА ХОСТА ======================
-run_command "Проверка, что порт 443 доступен извне" bash -c '
+run_command "Проверка, что порт 1443 доступен извне" bash -c '
   if curl --silent --fail --cacert "'"$SB_CERTIFICATE_FILE"'" --max-time 5 "https://'"$PUBLIC_HOSTNAME"':'"$OUTLINE_API_PORT"'/'"$SB_API_PREFIX"'/access-keys" >/dev/null; then
-    echo "Порт 443 кажется доступен снаружи."
+    echo "Порт 1443 кажется доступен снаружи."
   else
-    echo "Порт 443 может быть заблокирован фаерволом. Проверьте настройки!"
+    echo "Порт 1443 может быть заблокирован фаерволом. Проверьте настройки!"
     exit 1
   fi
 '
