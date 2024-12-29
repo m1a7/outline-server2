@@ -351,7 +351,7 @@ run_command "Запуск контейнера Shadowsocks с obfs4 (приме�
   docker run -d \
     --name shadowsocks-obfs \
     --restart always \
-    -p 9443:9443 \
+    -p 7443:7443 \
     -e "SERVER_ADDR=0.0.0.0" \
     -e "PASSWORD=MySecretPassword" \
     -e "METHOD=aes-256-gcm" \
