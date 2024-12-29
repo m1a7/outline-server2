@@ -1,179 +1,114 @@
 #!/bin/bash
 
-# Этот скрипт настраивает VPN-сервер с использованием Outline VPN и дополнительных настроек безопасности.
-# Скрипт полностью совместим с Outline Manager и Ubuntu 22.04.
-# Логирование выполнено в цветном формате для удобства чтения.
+set -euo pipefail
 
-set +e
+LOG_FILE="/var/log/outline_install.log"
+touch "$LOG_FILE"
 
-# Цвета для логирования
-RED="\033[0;31m"
-GREEN="\033[0;32m"
-YELLOW="\033[1;33m"
-CYAN="\033[0;36m"
-NC="\033[0m" # No Color
-
-# Константы
-MTU_VALUE=1500
-VPN_PORT=443
-OBFUSCATION_PORT=8443
-NAT_INTERFACE=eth0
-SHADOWBOX_DIR="/opt/outline"
-DOCKER_IMAGE="quay.io/outline/shadowbox:stable"
-CERT_SHA256=""
-API_URL=""
-CURRENT_STEP=""
-
-# Логирование
-log_info() {
-  echo -e "${CYAN}[INFO] $1${NC}"
+function log() {
+  local MESSAGE=$1
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $MESSAGE" | tee -a "$LOG_FILE"
 }
 
-log_success() {
-  echo -e "${GREEN}[OK] $1${NC}"
-}
+function test_command() {
+  local COMMAND=$1
+  local SUCCESS_MESSAGE=$2
+  local FAILURE_MESSAGE=$3
 
-log_warning() {
-  echo -e "${YELLOW}[WARNING] $1${NC}"
-}
-
-log_error() {
-  local errmsg="$1"
-  echo -e "${RED}[ERROR] $errmsg${NC}"
-  echo -e "${RED}[ERROR] Вопрос для ChatGPT: 'Почему в процессе выполнения шага "${CURRENT_STEP}" возникла ошибка: "${errmsg}"?'${NC}"
-}
-
-run_command() {
-  local step_description="$1"
-  shift
-  CURRENT_STEP="$step_description"
-
-  log_info "Начало шага: '$step_description'"
-  if "$@"; then
-    log_success "Шаг '$step_description' завершён успешно."
+  if eval "$COMMAND"; then
+    log "$SUCCESS_MESSAGE"
   else
-    log_error "Не удалось выполнить шаг '$step_description'."
+    log "$FAILURE_MESSAGE"
+    exit 1
   fi
 }
 
-# Функция для проверки и подготовки окружения
-prepare_environment() {
-  run_command "Проверка наличия Docker" bash -c '
-    if ! command -v docker &>/dev/null; then
-      echo "Docker не найден. Устанавливаем..."
-      curl -fsSL https://get.docker.com | sh
-      if [[ $? -eq 0 ]]; then
-        echo "Docker установлен успешно."
-      else
-        echo "Не удалось установить Docker!"
-        exit 1
-      fi
-    else
-      echo "Docker уже установлен."
-    fi
-  '
-
-  run_command "Проверка, что Docker запущен" bash -c '
-    if ! systemctl is-active --quiet docker; then
-      echo "Docker не запущен. Попытаюсь запустить..."
-      systemctl enable docker
-      systemctl start docker
-      if ! systemctl is-active --quiet docker; then
-        echo "Не удалось запустить Docker!"
-        exit 1
-      fi
-    fi
-  '
-
-  run_command "Создание директории для Outline" bash -c '
-    mkdir -p "$SHADOWBOX_DIR"
-    chmod 700 "$SHADOWBOX_DIR"
-  '
+function configure_icmp() {
+  log "Configuring ICMP settings..."
+  test_command \
+    "sysctl -w net.ipv4.icmp_echo_ignore_all=0" \
+    "ICMP echo requests enabled." \
+    "Failed to enable ICMP echo requests."
+  test_command \
+    "sysctl -w net.ipv4.icmp_echo_ignore_broadcasts=1" \
+    "ICMP broadcast suppression enabled." \
+    "Failed to enable ICMP broadcast suppression."
 }
 
-configure_icmp() {
-  run_command "Настройка ICMP" bash -c '
-    iptables -A INPUT -p icmp --icmp-type echo-request -j DROP
-    iptables -A OUTPUT -p icmp --icmp-type echo-reply -j DROP
-  '
+function configure_mtu() {
+  log "Configuring MTU..."
+  INTERFACE=$(ip route | grep default | awk '{print $5}')
+  MTU_VALUE=1400
+  test_command \
+    "ip link set dev $INTERFACE mtu $MTU_VALUE" \
+    "MTU set to $MTU_VALUE on interface $INTERFACE." \
+    "Failed to set MTU on interface $INTERFACE."
 }
 
-adjust_mtu() {
-  run_command "Изменение MTU на $MTU_VALUE" bash -c '
-    ip link set dev $NAT_INTERFACE mtu $MTU_VALUE
-  '
+function configure_nat() {
+  log "Configuring NAT..."
+  test_command \
+    "sysctl -w net.ipv4.ip_forward=1" \
+    "IP forwarding enabled." \
+    "Failed to enable IP forwarding."
+  test_command \
+    "iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE" \
+    "NAT configuration applied." \
+    "Failed to configure NAT."
 }
 
-configure_nat() {
-  run_command "Настройка NAT" bash -c '
-    iptables -t nat -A POSTROUTING -o $NAT_INTERFACE -j MASQUERADE
-  '
+function install_docker() {
+  if ! command -v docker &>/dev/null; then
+    log "Docker not found. Installing..."
+    test_command \
+      "curl -fsSL https://get.docker.com | sh" \
+      "Docker installed successfully." \
+      "Failed to install Docker."
+  else
+    log "Docker is already installed."
+  fi
 }
 
-configure_ports() {
-  run_command "Настройка портов $VPN_PORT и $OBFUSCATION_PORT" bash -c '
-    iptables -A INPUT -p tcp --dport $VPN_PORT -j ACCEPT
-    iptables -A INPUT -p udp --dport $VPN_PORT -j ACCEPT
-    iptables -A INPUT -p tcp --dport $OBFUSCATION_PORT -j ACCEPT
-    iptables -A INPUT -p udp --dport $OBFUSCATION_PORT -j ACCEPT
-  '
-}
-
-install_outline_vpn() {
-  run_command "Установка Outline VPN" bash -c '
-    docker run -d --name shadowbox --restart always \
+function install_outline() {
+  log "Installing Outline server..."
+  SHADOWBOX_DIR="/opt/outline"
+  mkdir -p "$SHADOWBOX_DIR"
+  test_command \
+    "docker run -d \
+      --name shadowbox \
+      --restart always \
       --net host \
-      -e "SB_API_PORT=$VPN_PORT" \
-      -e "SB_CERTIFICATE_FILE=/etc/shadowbox-selfsigned.crt" \
-      -e "SB_PRIVATE_KEY_FILE=/etc/shadowbox-selfsigned.key" \
-      -v "$SHADOWBOX_DIR:/opt/outline" \
-      "$DOCKER_IMAGE"
-  '
-
-  run_command "Установка Obfsproxy в Docker" bash -c '
-    docker run -d --name obfsproxy \
-      -p $OBFUSCATION_PORT:$OBFUSCATION_PORT \
-      quay.io/outline/obfsproxy obfs3 --dest=127.0.0.1:$VPN_PORT server --listen=0.0.0.0:$OBFUSCATION_PORT
-  '
+      -v $SHADOWBOX_DIR:$SHADOWBOX_DIR \
+      -e SB_STATE_DIR=$SHADOWBOX_DIR \
+      quay.io/outline/shadowbox:stable" \
+    "Outline server installed successfully." \
+    "Failed to install Outline server."
 }
 
-setup_encryption_headers() {
-  run_command "Настройка шифрования" bash -c '
-    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-      -keyout /etc/shadowbox-selfsigned.key \
-      -out /etc/shadowbox-selfsigned.crt \
-      -subj "/CN=OutlineVPN"
-  '
+function generate_outline_config() {
+  log "Generating Outline configuration..."
+  API_URL="https://$(curl -s ifconfig.me):443/$(head -c 16 /dev/urandom | base64 | tr '/+' '_-' | tr -d '=')"
+  CERT_SHA256=$(openssl x509 -noout -fingerprint -sha256 -inform pem -in "$SHADOWBOX_DIR/shadowbox-selfsigned.crt" | awk -F'=' '{print $2}' | tr -d ':')
+
+  if [[ -z "$CERT_SHA256" || -z "$API_URL" ]]; then
+    log "Failed to generate configuration string."
+    exit 1
+  fi
+
+  CONFIG_STRING="{\"apiUrl\":\"$API_URL\",\"certSha256\":\"$CERT_SHA256\"}"
+  log "Configuration string generated: $CONFIG_STRING"
+  echo "$CONFIG_STRING"
 }
 
-test_configuration() {
-  run_command "Тестирование конфигурации" bash -c '
-    if ! docker ps | grep -q shadowbox; then
-      echo "Ошибка запуска сервера Outline. Проверьте логи Docker."
-      exit 1
-    fi
-  '
-}
-
-output_outline_manager_config() {
-  run_command "Генерация строки для Outline Manager" bash -c '
-    API_URL="https://$(curl -s https://icanhazip.com):$VPN_PORT/oaUAMa0vlr0ev57n9MmQsA"
-    echo "{\"apiUrl\":\"$API_URL\",\"certSha256\":\"$CERT_SHA256\"}"
-  '
-}
-
-main() {
-  prepare_environment
+function main() {
+  log "Starting Outline server setup..."
+  install_docker
   configure_icmp
-  adjust_mtu
+  configure_mtu
   configure_nat
-  configure_ports
-  setup_encryption_headers
-  install_outline_vpn
-  test_configuration
-  output_outline_manager_config
-
-  log_success "Конфигурация завершена."
+  install_outline
+  generate_outline_config
+  log "Setup complete. Check the log at $LOG_FILE for details."
 }
 
 main
