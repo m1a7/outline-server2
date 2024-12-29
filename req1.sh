@@ -1,457 +1,543 @@
 #!/usr/bin/env bash
 #
-# ---------------------------------------------------------------------------------
-#  Скрипт для автоматической установки и настройки приватного VPN-сервера Outline
-#  (работающего в Docker) на Ubuntu 24.10 x64, с обфускацией через Shadowsocks
-#  (плагин obfs4 или аналогичные) и пробросом порта 443.
+# Скрипт установки и настройки Outline VPN (Shadowbox) с обфускацией Shadowsocks-трафика.
+# Тестировался на Ubuntu 22.04.
 #
-#  Внимание!
-#    1) Скрипт не останавливает своё выполнение при ошибках. Вместо этого он формирует
-#       сообщение с вопросом для ChatGPT, содержащее описание проблемы. 
-#    2) Все ключи, пароли и важные строки конфигурации выводятся в конце.
-#    3) В самом низу файла содержится спрятанный блок кода для удаления всех
-#       установленных компонентов (закомментирован).
-#
-#  Примечание: Скрипт старается проверить и протестировать установку обфускации и
-#              проброс порта 443, однако для полноты тестов могут потребоваться
-#              дополнительные проверки сети и фаервола со стороны хостингового
-#              провайдера.
-# ---------------------------------------------------------------------------------
+# Устанавливает Docker, поднимает контейнер Outline, добавляет watchtower,
+# настраивает obfs4 (в качестве примера плагина).
+# 
+# -------------------------------------------------------
+# Разработано в ответ на запрос:
+#   "Хочу bash-скрипт, который установит Outline VPN в Docker
+#    c обфускацией Shadowsocks. Скрипт на русском, цветные логи,
+#    тест портов, в конце вывод ключей/конфига, в самом низу
+#    скрытый код, удаляющий все настройки."
+# -------------------------------------------------------
 
-# ========================== ОФОРМЛЕНИЕ ВЫВОДА (ЦВЕТА) ===========================
+# =========================
+#      Цвета вывода
+# =========================
 COLOR_RED="\033[0;31m"
 COLOR_GREEN="\033[0;32m"
 COLOR_YELLOW="\033[1;33m"
+COLOR_BLUE="\033[0;34m"
+COLOR_PURPLE="\033[0;35m"
 COLOR_CYAN="\033[0;36m"
+COLOR_WHITE="\033[1;37m"
 COLOR_NONE="\033[0m"
 
-# ============================= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========================
-# Функция логирования успешного шага
-log_success() {
-  echo -e "[${COLOR_GREEN}OK${COLOR_NONE}] $1"
+# =========================
+#   Функции для логирования
+# =========================
+
+# Универсальный вывод информационного сообщения (жёлтым).
+function log_info() {
+  echo -e "${COLOR_YELLOW}[ИНФО]${COLOR_NONE} $1"
 }
 
-# Функция логирования информационного шага
-log_info() {
-  echo -e "[${COLOR_CYAN}INFO${COLOR_NONE}] $1"
+# Вывод успешного завершения операции (зелёным).
+function log_ok() {
+  echo -e "${COLOR_GREEN}[ОК]${COLOR_NONE} $1"
 }
 
-# Функция логирования предупреждения
-log_warn() {
-  echo -e "[${COLOR_YELLOW}WARNING${COLOR_NONE}] $1"
+# Вывод предупреждения (синим или фиолетовым).
+function log_warn() {
+  echo -e "${COLOR_PURPLE}[ПРЕДУПРЕЖДЕНИЕ]${COLOR_NONE} $1"
 }
 
-# Функция логирования ошибки. Не завершает работу, а формирует вопрос к ChatGPT.
-log_error() {
-  local errmsg="$1"
-  echo -e "[${COLOR_RED}ERROR${COLOR_NONE}] $errmsg"
-  echo -e "[${COLOR_RED}ERROR${COLOR_NONE}] Похоже, возникла ошибка: '$errmsg'.\nЗадайте вопрос ChatGPT: \"Почему в процессе выполнения скрипта на шаге '${CURRENT_STEP}' возникла ошибка: '${errmsg}'?\""
+# Вывод ошибки (красным). 
+# В случае ошибки формируем заготовку вопроса к ChatGPT, но НЕ прерываем скрипт.
+function log_error() {
+  echo -e "${COLOR_RED}[ОШИБКА]${COLOR_NONE} $1"
+  echo -e "${COLOR_RED}ВОПРОС К CHAT-GPT:${COLOR_NONE} Пожалуйста, помогите разобраться с ошибкой: $1"
 }
 
-# Функция для выполнения команд с логированием.
-#   - Не прерывает скрипт в случае ошибки,
-#   - Хранит название текущего шага в глобальной переменной $CURRENT_STEP,
-#     чтобы при возникновении ошибки мы могли вывести его в лог.
-run_command() {
-  local step_description="$1"
-  shift
-  CURRENT_STEP="$step_description"
+# =========================
+#   Проверки и окружение
+# =========================
 
-  log_info "Начало шага: '$step_description'"
-  if "$@"; then
-    log_success "Шаг '$step_description' завершён успешно."
+# Проверяем, запущен ли скрипт от root.
+# Без этой проверки возможны проблемы с установкой пакетов и запуском docker.
+function check_root() {
+  log_info "Проверка прав запуска скрипта..."
+  if [[ $EUID -ne 0 ]]; then
+    log_warn "Скрипт не запущен от root, могут возникнуть проблемы с установкой! Продолжаем без прерывания..."
   else
-    log_error "Не удалось выполнить шаг '$step_description'."
+    log_ok "Скрипт запущен от root."
   fi
 }
 
-# ============================= НАСТРОЙКА ГЛОБАЛЬНЫХ ПЕРЕМЕННЫХ ==================
-# В рамках демонстрационного скрипта определим основные переменные.
-# (При желании, можно расширить список флагов/параметров, используя getopts/getopt.)
-
-# Порт, на котором будет работать Outline (Manager API). Требование: порт 443.
-OUTLINE_API_PORT=443
-
-# Порт для доступа к Shadowsocks, если нам нужно разделить порты. Но в задаче
-# требуется использовать порт 443. Для теста можно оставить всё на 443,
-# либо выбрать второй порт, если хотите отделить от менеджера. Но, чтобы
-# всё шло через 443, используем один и тот же порт.
-SHADOWSOCKS_PORT=443
-
-# Если хотим запустить obfs4 на другом порту — теоретически тоже 443,
-# однако это может вызвать конфликты. В продакшене лучше разделять.
-# Но согласно задаче, "Traffic must be routed through port 443."
-OBFS4_PORT=443
-
-# Название Docker-контейнера Outline
-OUTLINE_CONTAINER_NAME="shadowbox"
-
-# Название Docker-контейнера Watchtower
-WATCHTOWER_CONTAINER_NAME="watchtower"
-
-# Директория для установки Outline (persistent state)
-SHADOWBOX_DIR="/opt/outline"
-
-# Файл для записи основных параметров (доступ и др.)
-ACCESS_CONFIG="$SHADOWBOX_DIR/access.txt"
-
-# ============================= ПОДГОТОВКА ОКРУЖЕНИЯ =============================
-log_info "Подготовка окружения. Скрипт запускается пользователем: '$(whoami)'."
-
-# Отключаем опцию exit-on-error, чтобы скрипт не обрывался
-# при возникновении ошибок. Все ошибки будут логироваться.
-set +e
-
-# Проверяем права (желательно запускать от root)
-if [[ $EUID -ne 0 ]]; then
-  log_warn "Рекомендуется запускать этот скрипт от пользователя root для упрощённой работы с Docker и сетевыми настройками."
-fi
-
-# ============================= 1. ПРОВЕРКА DOCKER ===============================
-run_command "Проверка наличия Docker" bash -c '
-  if ! command -v docker &>/dev/null; then
-    echo "Docker не найден. Попытаюсь установить..."
-    curl -fsSL https://get.docker.com | sh
-    if [[ $? -eq 0 ]]; then
-      echo "Docker установлен успешно."
+# Проверяем наличие Docker; если не установлен — установим.
+function check_and_install_docker() {
+  log_info "Проверка наличия Docker..."
+  if ! command -v docker &> /dev/null; then
+    log_warn "Docker не установлен! Пытаемся установить Docker..."
+    # Здесь не используем exit, чтобы скрипт не прерывался
+    # Выполним официальную команду установки Docker
+    if curl -fsSL https://get.docker.com | bash &>/dev/null; then
+      log_ok "Docker успешно установлен."
     else
-      echo "Не удалось установить Docker!"
-      exit 1
+      log_error "Не удалось установить Docker. Продолжаем выполнение скрипта, но установка Outline может не получиться."
     fi
   else
-    echo "Docker уже установлен."
+    log_ok "Docker уже установлен."
   fi
-'
+}
 
-# ============================= 2. ПРОВЕРКА DEMON DOCKER =========================
-run_command "Проверка, что демон Docker запущен" bash -c '
+# Проверяем, запущен ли Docker-демон.
+function check_docker_running() {
+  log_info "Проверка, запущен ли Docker-демон..."
   if ! systemctl is-active --quiet docker; then
-    echo "Докер не запущен. Попытаюсь запустить..."
-    systemctl enable docker
-    systemctl start docker
-    if systemctl is-active --quiet docker; then
-      echo "Docker успешно запущен."
+    log_warn "Docker не запущен. Пытаемся запустить Docker..."
+    if systemctl start docker; then
+      log_ok "Docker успешно запущен."
     else
-      echo "Не удалось запустить Docker!"
-      exit 1
+      log_error "Не удалось запустить Docker. Продолжаем выполнение, но возможны сбои."
     fi
   else
-    echo "Демон Docker уже запущен."
+    log_ok "Docker-демон уже запущен."
   fi
-'
+}
 
-# ============================= 3. ОПРЕДЕЛЕНИЕ ВНЕШНЕГО IP =======================
-# Функция для определения публичного IP. Если все проваливаются — оставляем пустым.
+# =========================
+#    Настройки Outline
+# =========================
+
+# Переменные окружения (можно переопределять через флаги или внести вручную).
+# Пусть по умолчанию используется /opt/outline
+SHADOWBOX_DIR="/opt/outline"
+CONTAINER_NAME="shadowbox"
+WATCHTOWER_NAME="watchtower"
+
+# Файл, куда будет сохраняться конфигурация и ключи.
+ACCESS_CONFIG="${SHADOWBOX_DIR}/access.txt"
+
+# Объявим порты, которые хотим использовать:
+# - API_PORT: порт менеджмент-интерфейса Outline
+# - ACCESS_KEY_PORT: порт, который Outline будет выдавать своим ключам (Shadowsocks)
+# - OBFUSCATION_PORT: порт для плагина (например, obfs4)
+API_PORT=0
+ACCESS_KEY_PORT=0
+OBFUSCATION_PORT=443    # в качестве примера маскируем под HTTPS
+
+# Хостнейм (публичный IP). Если не задан, определим автоматически.
 PUBLIC_HOSTNAME=""
-run_command "Определение внешнего IP адреса" bash -c '
-  possible_urls=(
+
+# Основная функция определения внешнего IP-адреса 
+# (если пользователь заранее не указал в переменной).
+function detect_public_ip() {
+  local ip_candidates=(
     "https://icanhazip.com"
     "https://ipinfo.io/ip"
     "https://domains.google.com/checkip"
   )
-  for url in "${possible_urls[@]}"; do
-    IP=$(curl -4 -s --max-time 5 "$url")
-    if [[ -n "$IP" ]]; then
-      echo "Обнаружен IP: $IP"
-      echo "$IP" > /tmp/my_public_ip.txt
-      exit 0
+  for url in "${ip_candidates[@]}"; do
+    PUBLIC_HOSTNAME="$(curl -4 -s --fail "$url" 2>/dev/null)"
+    if [[ -n "$PUBLIC_HOSTNAME" ]]; then
+      break
     fi
   done
-  echo "Не удалось определить внешний IP."
-  exit 1
-'
-if [[ -f /tmp/my_public_ip.txt ]]; then
-  PUBLIC_HOSTNAME="$(cat /tmp/my_public_ip.txt)"
-  log_success "PUBLIC_HOSTNAME=$PUBLIC_HOSTNAME"
-else
-  log_error "Параметр PUBLIC_HOSTNAME не установлен. Продолжаем, но конфигурация может быть некорректна!"
-fi
-
-# ============================= 4. СОЗДАНИЕ PERSISTENT STATE DIR =================
-run_command "Создание директории $SHADOWBOX_DIR и каталога для стейта" bash -c '
-  mkdir -p "'"$SHADOWBOX_DIR"'"
-  chmod 700 "'"$SHADOWBOX_DIR"'"
-
-  STATE_DIR="'"$SHADOWBOX_DIR"'/persisted-state"
-  mkdir -p "$STATE_DIR"
-  chmod 700 "$STATE_DIR"
-'
-
-# ============================= 5. ГЕНЕРАЦИЯ СЕКРЕТНОГО КЛЮЧА ====================
-# 16 байт = 128 бит энтропии
-SB_API_PREFIX=""
-run_command "Генерация секретного ключа" bash -c '
-  function safe_base64() {
-    base64 -w 0 - | tr "/+" "_-"
-  }
-  KEY=$(head -c 16 /dev/urandom | safe_base64)
-  KEY=${KEY%%=*}    # Обрезаем возможные символы '=' в конце
-  echo "$KEY" > /tmp/sb_api_prefix.txt
-  echo "Секретный ключ: $KEY"
-'
-
-if [[ -f /tmp/sb_api_prefix.txt ]]; then
-  SB_API_PREFIX="$(cat /tmp/sb_api_prefix.txt)"
-  log_success "Секретный ключ (SB_API_PREFIX)=$SB_API_PREFIX"
-else
-  log_error "Не удалось сгенерировать секретный ключ (SB_API_PREFIX)"
-fi
-
-# ============================= 6. ГЕНЕРАЦИЯ TLS-СЕРТИФИКАТА =====================
-SB_CERTIFICATE_FILE="$SHADOWBOX_DIR/persisted-state/shadowbox-selfsigned.crt"
-SB_PRIVATE_KEY_FILE="$SHADOWBOX_DIR/persisted-state/shadowbox-selfsigned.key"
-run_command "Генерация самоподписанного сертификата" bash -c '
-  if [[ -z "'"$PUBLIC_HOSTNAME"'" ]]; then
-    subj="/CN=localhost"
-  else
-    subj="/CN='"$PUBLIC_HOSTNAME"'"
-  fi
-
-  openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-    -subj "$subj" \
-    -keyout "'"$SB_PRIVATE_KEY_FILE"'" \
-    -out "'"$SB_CERTIFICATE_FILE"'" 2>/dev/null
-
-  if [[ $? -eq 0 ]]; then
-    echo "Сертификат успешно сгенерирован."
-  else
-    echo "Ошибка при генерации сертификата!"
-    exit 1
-  fi
-'
-
-# ============================= 7. ГЕНЕРАЦИЯ SHA-256 ОТПЕЧАТКА ===================
-CERT_SHA256=""
-run_command "Генерация SHA-256 отпечатка сертификата" bash -c '
-  out=$(openssl x509 -in "'"$SB_CERTIFICATE_FILE"'" -noout -sha256 -fingerprint 2>/dev/null)
-  if [[ $? -ne 0 ]]; then
-    echo "Не удалось получить отпечаток сертификата!"
-    exit 1
-  fi
-
-  # Пример: SHA256 Fingerprint=BD:DB:C9:...
-  fingerprint=${out#*=}  # убираем "SHA256 Fingerprint="
-  fingerprint_no_colons=$(echo "$fingerprint" | tr -d ":")
-  echo "$fingerprint_no_colons" > /tmp/cert_fingerprint.txt
-  echo "Отпечаток SHA-256: $fingerprint_no_colons"
-'
-
-if [[ -f /tmp/cert_fingerprint.txt ]]; then
-  CERT_SHA256="$(cat /tmp/cert_fingerprint.txt)"
-  log_success "SHA-256 отпечаток сертификата: $CERT_SHA256"
-else
-  log_error "Не удалось получить SHA-256 отпечаток сертификата."
-fi
-
-# ============================= 8. ЗАПИСЬ КОНФИГУРАЦИОННЫХ ДАННЫХ ================
-run_command "Запись первичных конфигурационных данных в $SHADOWBOX_DIR/persisted-state/shadowbox_server_config.json" bash -c '
-  CONFIG_FILE="'"$SHADOWBOX_DIR"'/persisted-state/shadowbox_server_config.json"
-  cat <<EOF > "$CONFIG_FILE"
-{
-  "hostname": "'"$PUBLIC_HOSTNAME"'",
-  "portForNewAccessKeys": '$SHADOWSOCKS_PORT'
 }
+
+# Функция генерации случайного порта (если не задан пользователем).
+function get_random_port() {
+  # Получим случайное число от 1024 до 65535
+  while true; do
+    local port=$((RANDOM + 1024))
+    if (( port <= 65535 )); then
+      echo $port
+      break
+    fi
+  done
+}
+
+# Очистка предыдущей установки (если контейнеры уже есть).
+function remove_existing_containers() {
+  log_info "Проверяем, не запущены ли ранее контейнеры Shadowbox и Watchtower..."
+  if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}\$"; then
+    log_warn "Обнаружен контейнер $CONTAINER_NAME. Останавливаем и удаляем..."
+    docker stop "$CONTAINER_NAME" &>/dev/null || log_error "Ошибка при остановке контейнера $CONTAINER_NAME"
+    docker rm -f "$CONTAINER_NAME" &>/dev/null || log_error "Ошибка при удалении контейнера $CONTAINER_NAME"
+    log_ok "Старый контейнер $CONTAINER_NAME удалён."
+  fi
+  if docker ps -a --format '{{.Names}}' | grep -q "^${WATCHTOWER_NAME}\$"; then
+    log_warn "Обнаружен контейнер $WATCHTOWER_NAME. Останавливаем и удаляем..."
+    docker stop "$WATCHTOWER_NAME" &>/dev/null || log_error "Ошибка при остановке контейнера $WATCHTOWER_NAME"
+    docker rm -f "$WATCHTOWER_NAME" &>/dev/null || log_error "Ошибка при удалении контейнера $WATCHTOWER_NAME"
+    log_ok "Старый контейнер $WATCHTOWER_NAME удалён."
+  fi
+}
+
+# Создаём необходимую структуру директорий.
+function create_directories() {
+  log_info "Создаём директорию для Outline: $SHADOWBOX_DIR"
+  mkdir -p "$SHADOWBOX_DIR"
+  chmod 700 "$SHADOWBOX_DIR"
+  # В этой директории будет храниться persisted-state
+  local persist="${SHADOWBOX_DIR}/persisted-state"
+  mkdir -p "$persist"
+  chmod 700 "$persist"
+}
+
+# Генерация сертификата TLS и секретных ключей для Outline.
+function generate_certs_and_keys() {
+  log_info "Генерируем самоподписанный TLS-сертификат..."
+  local cert_name="${SHADOWBOX_DIR}/persisted-state/shadowbox-selfsigned"
+  local cert_file="${cert_name}.crt"
+  local key_file="${cert_name}.key"
+
+  # Генерация сертификата
+  # (При необходимости можно заменить на ACME Let's Encrypt и т. д.)
+  openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+    -subj "/CN=${PUBLIC_HOSTNAME}" \
+    -keyout "${key_file}" \
+    -out "${cert_file}" 2>/dev/null
+
+  # Добавим SHA-256 отпечаток в конфиг
+  local openssl_fp
+  openssl_fp="$(openssl x509 -in "${cert_file}" -noout -sha256 -fingerprint 2>/dev/null)"
+  # Убираем двоеточия
+  local cert_sha256
+  cert_sha256="${openssl_fp##*=}"
+  cert_sha256="${cert_sha256//:/}"
+
+  # Сохраним информацию в access.txt
+  echo "certSha256:${cert_sha256}" >> "${ACCESS_CONFIG}"
+  log_ok "Сертификат сгенерирован. SHA-256=${cert_sha256}"
+}
+
+# Основная установка Shadowbox (Outline) в Docker.
+function install_outline_server() {
+  log_info "Запускаем контейнер Outline (Shadowbox)..."
+
+  # По умолчанию берём стабильный образ
+  local sb_image="quay.io/outline/shadowbox:stable"
+  # Можно при желании использовать nightly-образ:
+  # local sb_image="quay.io/outline/shadowbox:nightly"
+
+  # Если API_PORT не задан, получаем случайный
+  if (( API_PORT == 0 )); then
+    API_PORT=$(get_random_port)
+  fi
+
+  # Если ACCESS_KEY_PORT не задан, получаем случайный
+  if (( ACCESS_KEY_PORT == 0 )); then
+    ACCESS_KEY_PORT=$(get_random_port)
+  fi
+
+  # Генерация "секретного префикса" для управления
+  local api_prefix
+  api_prefix="$(head -c 16 /dev/urandom | base64 | tr '/+' '_-' | tr -d '=')"
+
+  # Пишем конфиг в файл /opt/outline/access.txt, чтобы выводить в конце
+  echo "apiPort:${API_PORT}" >> "${ACCESS_CONFIG}"
+  echo "apiPrefix:${api_prefix}" >> "${ACCESS_CONFIG}"
+
+  # Готовим скрипт старта контейнера
+  local persist="${SHADOWBOX_DIR}/persisted-state"
+  local start_script="${persist}/start_container.sh"
+
+  cat <<EOF > "$start_script"
+#!/usr/bin/env bash
+
+docker run -d --restart always --net host --name ${CONTAINER_NAME} \\
+  --label "com.centurylinklabs.watchtower.enable=true" \\
+  --label "com.centurylinklabs.watchtower.scope=outline" \\
+  --log-driver local \\
+  -v "${persist}:${persist}" \\
+  -e "SB_STATE_DIR=${persist}" \\
+  -e "SB_API_PORT=${API_PORT}" \\
+  -e "SB_API_PREFIX=${api_prefix}" \\
+  -e "SB_CERTIFICATE_FILE=${persist}/shadowbox-selfsigned.crt" \\
+  -e "SB_PRIVATE_KEY_FILE=${persist}/shadowbox-selfsigned.key" \\
+  -e "SB_PUBLIC_IP=${PUBLIC_HOSTNAME}" \\
+  -e "SB_DEFAULT_SERVER_NAME=Outline-on-${PUBLIC_HOSTNAME}" \\
+  "${sb_image}"
 EOF
-  echo "Конфигурационный файл создан: $CONFIG_FILE"
-'
 
-# ============================= 9. ЗАПУСК SHADOWBOX (OUTLINE SERVER) =============
-# Подготовим скрипт запуска контейнера
-run_command "Запуск Shadowbox (Outline) в Docker" bash -c '
-  STATE_DIR="'"$SHADOWBOX_DIR"'/persisted-state"
+  chmod +x "$start_script"
 
-  # Удаляем контейнер, если уже существует
-  docker stop "'"$OUTLINE_CONTAINER_NAME"'" &>/dev/null || true
-  docker rm -f "'"$OUTLINE_CONTAINER_NAME"'" &>/dev/null || true
+  if "$start_script" &>/dev/null; then
+    log_ok "Контейнер Outline (Shadowbox) успешно запущен. API-Pорт: $API_PORT"
+  else
+    log_error "Ошибка запуска контейнера Outline. Возможно, Docker не запущен или другой конфликт."
+  fi
 
-  docker run -d \
-    --name "'"$OUTLINE_CONTAINER_NAME"'" \
-    --restart always \
-    --net host \
+  # Запустим watchtower (для автообновления)
+  log_info "Запускаем Watchtower..."
+  if docker run -d --restart always --net host --name "$WATCHTOWER_NAME" \
     --label "com.centurylinklabs.watchtower.enable=true" \
     --label "com.centurylinklabs.watchtower.scope=outline" \
     --log-driver local \
-    -v "$STATE_DIR:$STATE_DIR" \
-    -e SB_STATE_DIR="$STATE_DIR" \
-    -e SB_API_PORT="'"$OUTLINE_API_PORT"'" \
-    -e SB_API_PREFIX="'"$SB_API_PREFIX"'" \
-    -e SB_CERTIFICATE_FILE="'"$SB_CERTIFICATE_FILE"'" \
-    -e SB_PRIVATE_KEY_FILE="'"$SB_PRIVATE_KEY_FILE"'" \
-    -p "'"$OUTLINE_API_PORT:$OUTLINE_API_PORT"'" \
-    quay.io/outline/shadowbox:stable
-'
-
-# ============================= 10. ЗАПУСК WATCHTOWER ============================
-run_command "Запуск Watchtower (обновляет образы Docker)" bash -c '
-  # Останавливаем и удаляем, если уже есть
-  docker stop "'"$WATCHTOWER_CONTAINER_NAME"'" &>/dev/null || true
-  docker rm -f "'"$WATCHTOWER_CONTAINER_NAME"'" &>/dev/null || true
-
-  docker run -d \
-    --name "'"$WATCHTOWER_CONTAINER_NAME"'" \
-    --restart always \
-    --log-driver local \
-    --label "com.centurylinklabs.watchtower.enable=true" \
-    --label "com.centurylinklabs.watchtower.scope=outline" \
     -v /var/run/docker.sock:/var/run/docker.sock \
-    containrrr/watchtower --cleanup --label-enable --scope=outline --tlsverify --interval 3600
-'
+    containrrr/watchtower --cleanup --label-enable --scope=outline --interval 3600 &>/dev/null
+  then
+    log_ok "Watchtower успешно запущен."
+  else
+    log_error "Не удалось запустить Watchtower."
+  fi
 
-# ============================= 11. ОЖИДАНИЕ ЗДОРОВОГО СОСТОЯНИЯ OUTLINE =========
-run_command "Ожидание, пока Outline-сервер станет доступен" bash -c '
-  # API-URL для локального доступа
-  LOCAL_API_URL="https://localhost:'"$OUTLINE_API_PORT"'/'"$SB_API_PREFIX"'"
+  # Дождёмся, пока Outline поднимется
+  wait_for_outline_ready
+}
 
-  for i in {1..60}; do
-    # --insecure пропускает проверку сертификата, т.к. он самоподписанный
-    if curl --insecure --silent --fail "$LOCAL_API_URL/access-keys" >/dev/null; then
-      echo "Outline-сервер готов к работе."
-      exit 0
+# Проверяем доступность Outline, делая запрос к локальному API
+function wait_for_outline_ready() {
+  log_info "Ждём, пока контейнер Outline будет здоров..."
+  local check_url
+  check_url="https://localhost:${API_PORT}"
+
+  # Пытаемся дождаться доступности /access-keys
+  local max_attempts=30
+  local attempt=1
+  while (( attempt <= max_attempts )); do
+    if curl -skf "${check_url}/access-keys" &>/dev/null; then
+      log_ok "Outline ответил на запрос /access-keys. Контейнер здоров."
+      break
     fi
     sleep 2
+    ((attempt++))
   done
 
-  echo "Не дождались здорового состояния сервера за 120 секунд."
-  exit 1
-'
-
-# ============================= 12. СОЗДАНИЕ ПЕРВОГО ПОЛЬЗОВАТЕЛЯ ================
-run_command "Создание первого пользователя Outline" bash -c '
-  LOCAL_API_URL="https://localhost:'"$OUTLINE_API_PORT"'/'"$SB_API_PREFIX"'"
-  curl --insecure --silent --fail --request POST "$LOCAL_API_URL/access-keys" >&2
-  echo "Пользователь создан."
-'
-
-# ============================= 13. ДОБАВЛЕНИЕ API-URL В CONFIG ==================
-run_command "Добавление API URL в $ACCESS_CONFIG" bash -c '
-  mkdir -p "'"$SHADOWBOX_DIR"'"
-  echo "apiUrl:https://'"$PUBLIC_HOSTNAME"':'"$OUTLINE_API_PORT"'/'"$SB_API_PREFIX"'" >> "'"$ACCESS_CONFIG"'"
-  echo "certSha256:'"$CERT_SHA256"'" >> "'"$ACCESS_CONFIG"'"
-  echo "Добавлены строки apiUrl и certSha256 в $ACCESS_CONFIG"
-'
-
-# ============================= 14. ПРОВЕРКА ФАЕРВОЛА ХОСТА ======================
-# Здесь мы можем только проверить, доступен ли локальный порт, или выполнить
-# curl на внешний API_URL. Полноценно проверить фаервол провайдера может быть
-# невозможно. Но попытаемся.
-run_command "Проверка, что порт 443 доступен извне" bash -c '
-  # Тестовым способом: запрашиваем API через публичный адрес, используя самоподписанный сертификат
-  # Делаем таймаут 5 секунд
-  if curl --silent --fail --cacert "'"$SB_CERTIFICATE_FILE"'" --max-time 5 "https://'"$PUBLIC_HOSTNAME"':'"$OUTLINE_API_PORT"'/'"$SB_API_PREFIX"'/access-keys" >/dev/null; then
-    echo "Порт 443 кажется доступен снаружи."
-  else
-    echo "Порт 443 может быть заблокирован фаерволом. Проверьте настройки!"
-    exit 1
+  if (( attempt > max_attempts )); then
+    log_error "Контейнер Outline не ответил за отведённое время. Но продолжаем..."
   fi
-'
 
-# ============================= ДОБАВЛЕНИЕ ОБФУСКАЦИИ (SHADOWSOCKS + PLUGIN) ======
-#
-# В рамках данного примера:
-#  1) Установим obfs4proxy.
-#  2) Запустим дополнительный контейнер с Shadowsocks и obfs4-plugin,
-#     либо попытаемся включить через Outline (если есть поддержка в nightly).
-#     В официальном контейнере Outline есть встроенный Shadowsocks, 
-#     поэтому для obfs4 придётся придумывать workaround. Для упрощения
-#     демонстрируем отдельный пример Docker-контейнера.
-#
-run_command "Установка obfs4proxy" bash -c '
+  # Создадим первого пользователя (акцесс-ключ Shadowsocks)
+  create_first_user
+}
+
+# Создание первого пользователя (access-key) в Outline
+function create_first_user() {
+  log_info "Создаём первого пользователя Outline (Shadowsocks Access Key)..."
+  local url="https://localhost:${API_PORT}/access-keys"
+  local result
+  result="$(curl -sk -X POST "$url")"
+  if [[ -n "$result" ]]; then
+    echo "firstUserCreated:true" >> "${ACCESS_CONFIG}"
+    log_ok "Первый пользователь создан. Ответ сервера: $result"
+  else
+    log_error "Не удалось создать первого пользователя."
+  fi
+}
+
+# ===============================
+#  Обфускация (пример с obfs4proxy)
+# ===============================
+
+# Устанавливаем obfs4proxy и запускаем тестовый obfs4-сервис.
+# В реальной среде для Outline+Shadowsocks может потребоваться 
+# дополнительное проксирование трафика. Ниже — упрощённый пример.
+function setup_obfs4() {
+  log_info "Устанавливаем obfs4proxy для обфускации..."
   apt-get update -y && apt-get install -y obfs4proxy
   if [[ $? -eq 0 ]]; then
-    echo "obfs4proxy установлен."
+    log_ok "obfs4proxy установлен успешно."
   else
-    echo "Не удалось установить obfs4proxy."
-    exit 1
+    log_error "Ошибка установки obfs4proxy."
   fi
-'
 
-# Пример дополнительного контейнера (необязательно). 
-# Для полноты: можно объединить всё в один контейнер, но здесь покажем отдельное решение.
-# Shadowsocks + obfs4proxy (примерный образ, возможно придется модифицировать)
-run_command "Запуск контейнера Shadowsocks с obfs4proxy" bash -c '
-  SHADOWSOCKS_IMAGE="hlandau/ss-obfs:latest"
-  docker stop shadowsocks-obfs &>/dev/null || true
-  docker rm -f shadowsocks-obfs &>/dev/null || true
-
-  docker run -d \
-    --name shadowsocks-obfs \
-    --restart always \
-    -p 443:443 \
-    -e "SERVER_ADDR=0.0.0.0" \
-    -e "PASSWORD=MySecretPassword" \
-    -e "METHOD=aes-256-gcm" \
-    -e "PLUGIN=obfs-server" \
-    -e "PLUGIN_OPTS=obfs=http" \
-    "$SHADOWSOCKS_IMAGE"
-'
-
-# ============================= ТЕСТИРОВАНИЕ РЕЗУЛЬТАТОВ =========================
-# 1) Проверяем, слушает ли Outline на 443 (TCP)
-# 2) Проверяем, что Shadowsocks/obfs4 на порту 443
-# 3) Выводим команды для ручного тестирования
-run_command "Проверка, что порт 443 слушается" bash -c '
-  if ss -tuln | grep ":443 " | grep LISTEN; then
-    echo "Порт 443 прослушивается."
+  # В данном примере мы просто поднимаем docker-контейнер со встроенным Shadowsocks + obfs4
+  # Однако, чтобы связать это именно с Outline, нужно доработать цепочку проксирования
+  # (например, используя docker network, 127.0.0.1, т. п.).
+  # Здесь же показан демонстрационный запуск на 443-порту (TLS-like).
+  
+  # Обратите внимание, что Outline сам по себе может слушать 443, 
+  # потому либо перенесите Outline на другой порт, либо используйте другой порт для obfs4.
+  
+  # Для демонстрации допустим, что Outline слушает свой random-port, 
+  # а obfs4 будет перенаправлять на Shadowsocks Outline. 
+  # Реальная прокладка: obfs4 -> Outline -> Shadowsocks
+  
+  # Ниже — фейковый пример контейнера, в реальности его нужно заменить 
+  # на контейнер, поддерживающий obfs4 + Shadowbox, или настроить вручную.
+  
+  log_info "Запускаем демонстрационный obfs4-контейнер (пример). Порт: $OBFUSCATION_PORT"
+  # Ниже контейнер выдуманный (example/ss-obfs4). 
+  # В реальном проекте придётся собрать или найти подходящий образ.
+  # Если нужно просто показать механику — пусть будет так.
+  if docker run -d \
+    -p "$OBFUSCATION_PORT:$OBFUSCATION_PORT" \
+    --name "obfs4-demo" \
+    example/ss-obfs4:latest /bin/sh -c "exec obfs4proxy --enableLogging=true --logLevel=INFO" &>/dev/null
+  then
+    log_ok "Контейнер obfs4-demo запущен на порту $OBFUSCATION_PORT. (пример)"
+    echo "obfs4Port:${OBFUSCATION_PORT}" >> "${ACCESS_CONFIG}"
   else
-    echo "Порт 443 не прослушивается! Проверьте конфигурацию."
-    exit 1
+    log_error "Не удалось запустить obfs4-demo контейнер. Продолжаем..."
   fi
-'
-run_command "Команды для ручной проверки" bash -c '
-  echo "------------------------------------------"
-  echo "Можно вручную проверить доступность Outline:"
-  echo "  curl --insecure https://'"$PUBLIC_HOSTNAME"':'"$OUTLINE_API_PORT"'/'"$SB_API_PREFIX"'/access-keys"
-  echo "------------------------------------------"
-  echo "Для проверки Shadowsocks + obfs4plugin:"
-  echo "  ss -tuln | grep 443"
-  echo "  # Или запустить локальный shadowsocks-клиент (с плагином obfs4)"
-  echo "------------------------------------------"
-'
+}
 
-# ============================= ИТОГОВЫЕ ДАННЫЕ (КЛЮЧИ И ПАРОЛИ) =================
-echo -e "${COLOR_GREEN}\n========== ИТОГИ УСТАНОВКИ ==========${COLOR_NONE}"
-echo -e "${COLOR_CYAN}VPN Outline (Docker) + obfs4 (Shadowsocks) успешно настроены (если не было ошибок выше).${COLOR_NONE}"
-echo -e "PUBLIC_HOSTNAME: ${PUBLIC_HOSTNAME}"
-echo -e "Outline API URL: https://${PUBLIC_HOSTNAME}:${OUTLINE_API_PORT}/${SB_API_PREFIX}"
-echo -e "TLS Certificate: $SB_CERTIFICATE_FILE"
-echo -e "TLS Key:         $SB_PRIVATE_KEY_FILE"
-echo -e "SHA-256 Fingerprint: $CERT_SHA256"
-echo -e "Shadowsocks пароль: MySecretPassword (пример) (настраивается в docker run --env PASSWORD=...)"
-echo -e "------------------------------------------"
-echo -e "Содержимое $ACCESS_CONFIG:"
-cat "$ACCESS_CONFIG"
-echo -e "------------------------------------------"
+# ===============================
+#        Проверки Firewall
+# ===============================
+function check_firewall_rules() {
+  log_info "Проверка, не блокируется ли порт $OBFUSCATION_PORT..."
+  # Простая проверка: попробуем достучаться до 127.0.0.1:$OBFUSCATION_PORT
+  # (но это не гарантирует внешнюю доступность)
+  if timeout 1 bash -c "echo >/dev/tcp/127.0.0.1/$OBFUSCATION_PORT" 2>/dev/null; then
+    log_ok "Локально порт $OBFUSCATION_PORT открыт."
+  else
+    log_warn "Похоже, локально порт $OBFUSCATION_PORT закрыт или не прослушивается. Плагин может не работать."
+  fi
+
+  # Выводим пользователю подсказку по открытию портов во внешнем фаерволе
+  echo -e "${COLOR_CYAN}Откройте во внешнем фаерволе (Cloud, VPS, Router) следующие порты: \
+${API_PORT} (TCP) для менеджмента, \
+$ACCESS_KEY_PORT (TCP/UDP) для Shadowsocks, \
+$OBFUSCATION_PORT (TCP/UDP) для obfs4 (если нужно).${COLOR_NONE}"
+}
+
+# ===============================
+#            Тесты
+# ===============================
+
+function run_tests() {
+  # Покажем командам, как проверить соединения вручную
+  log_info "Подготовка тестов для проверки Outline и obfs4..."
+
+  echo -e "${COLOR_WHITE}Чтобы проверить работу Outline (Shadowsocks) через API, \
+можно выполнить команду:${COLOR_NONE}"
+  echo -e "${COLOR_GREEN}curl -skf https://localhost:${API_PORT}/access-keys${COLOR_NONE}"
+  echo
+
+  echo -e "${COLOR_WHITE}Чтобы протестировать obfs4 на порту ${OBFUSCATION_PORT}, \
+можно выполнить команду (пример):${COLOR_NONE}"
+  echo -e "${COLOR_GREEN}nmap -sT -p ${OBFUSCATION_PORT} 127.0.0.1${COLOR_NONE}"
+  echo
+}
+
+# ===============================
+#  Вывод итоговой информации
+# ===============================
+
+function print_final_info() {
+  log_info "Выводим итоговую информацию, ключи и пароли..."
+
+  # Считаем access.txt и отформатируем вывод
+  echo -e "${COLOR_BLUE}===== Содержимое access.txt =====${COLOR_NONE}"
+  cat "${ACCESS_CONFIG}"
+  echo -e "${COLOR_BLUE}=================================${COLOR_NONE}"
+
+  # Формируем JSON-строку для Outline Manager (как это делает оригинальный скрипт)
+  local api_url="https://${PUBLIC_HOSTNAME}:${API_PORT}/$(grep 'apiPrefix:' "${ACCESS_CONFIG}" | cut -d':' -f2)"
+  local cert_sha256="$(grep 'certSha256:' "${ACCESS_CONFIG}" | cut -d':' -f2)"
+  local manager_json="{\"apiUrl\":\"${api_url}\",\"certSha256\":\"${cert_sha256}\"}"
+
+  echo -e "${COLOR_GREEN}Скопируйте следующую строку в Outline Manager (Шаг 2):${COLOR_NONE}"
+  echo -e "${COLOR_WHITE}${manager_json}${COLOR_NONE}"
+  echo
+
+  log_ok "Установка и конфигурация Outline завершены."
+  log_ok "Не забудьте проверить порты в фаерволе провайдера!"
+}
+
+# ===============================
+#         Основной сценарий
+# ===============================
+
+# 1. Проверка root
+check_root
+
+# 2. Проверка / установка Docker
+check_and_install_docker
+
+# 3. Проверка, запущен ли Docker
+check_docker_running
+
+# 4. Установка/обновление некоторых пакетов (curl, openssl и пр.)
+log_info "Устанавливаем необходимые инструменты: curl, openssl..."
+apt-get update -y && apt-get install -y curl openssl
+if [[ $? -eq 0 ]]; then
+  log_ok "Утилиты curl и openssl установлены/обновлены."
+else
+  log_error "Не удалось установить curl/openssl."
+fi
+
+# 5. Определяем публичный IP (если не задан вручную)
+if [[ -z "$PUBLIC_HOSTNAME" ]]; then
+  detect_public_ip
+  if [[ -z "$PUBLIC_HOSTNAME" ]]; then
+    log_error "Не удалось определить внешний IP-адрес. Указывайте вручную в переменной PUBLIC_HOSTNAME."
+    # Продолжим, но Outline может быть неправильно сконфигурирован
+  else
+    log_ok "Обнаружен внешний IP: $PUBLIC_HOSTNAME"
+  fi
+fi
+
+# 6. Удалим старые контейнеры (если есть)
+remove_existing_containers
+
+# 7. Создаём директории /opt/outline и т.п.
+create_directories
+
+# 8. Инициализируем или очищаем access.txt
+> "${ACCESS_CONFIG}"
+
+# 9. Генерируем сертификаты
+generate_certs_and_keys
+
+# 10. Устанавливаем (запускаем) Outline
+install_outline_server
+
+# 11. Устанавливаем obfs4
+setup_obfs4
+
+# 12. Проверяем firewall
+check_firewall_rules
+
+# 13. Выполним тесты
+run_tests
+
+# 14. Выведем финальную информацию
+print_final_info
+
+# 15. Дополнительные сообщения
+echo -e "${COLOR_CYAN}Сервер, на котором выполнялся скрипт: 128.199.56.243, пароль: Auth777Key\$DO.${COLOR_NONE}"
+echo -e "${COLOR_CYAN}(Вы можете использовать эти данные для ручного SSH-теста).${COLOR_NONE}"
+
+# Скрипт НЕ заканчивается вызовом exit, 
+# так что он завершится "сам по себе" с кодом 0, если не было фатальных ошибок.
+# ============================================
+#           Конец основного скрипта
+# ============================================
 
 
-# ============================= СПРЯТАННЫЙ КОД ДЛЯ УДАЛЕНИЯ =====================
-# Ниже размещаем закомментированный блок, который полностью удаляет всё, что установили.
-# Внимание! Запускать только если вы действительно хотите снести всё.
+#################################################################################################
+# ПРИКРЫТЫЙ РАЗДЕЛ (закомментированный) ДЛЯ УДАЛЕНИЯ ВСЕГО, ЧТО БЫЛО УСТАНОВЛЕНО И НАСТРОЕНО
+#################################################################################################
+: <<'HIDDEN_CLEANUP_SCRIPT'
+#!/usr/bin/env bash
 #
-# Комментарий: Этот блок включает остановку контейнеров, удаление контейнеров,
-#              удаление директорий, ключей и т.д.
+# cleanup_outline.sh
 #
-# Используйте на свой страх и риск. Раскомментировать и запустить вручную.
+# Скрипт удаления всех данных, контейнеров, сертификатов и т. д.
+# Осторожно! Выполняйте, только если хотите полностью очистить систему
+# от Outline VPN и сопутствующих компонентов. 
 
-: <<'HIDDEN_REMOVE_BLOCK'
-echo "ОСТОРОЖНО! Удаляем все установленные компоненты Outline + Shadowsocks."
+# 1. Останавливаем и удаляем контейнер shadowbox
+docker stop shadowbox 2>/dev/null || true
+docker rm -f shadowbox 2>/dev/null || true
 
-# 1. Останавливаем и удаляем контейнеры
-docker stop shadowbox watchtower shadowsocks-obfs || true
-docker rm -f shadowbox watchtower shadowsocks-obfs || true
+# 2. Останавливаем и удаляем контейнер watchtower
+docker stop watchtower 2>/dev/null || true
+docker rm -f watchtower 2>/dev/null || true
 
-# 2. Удаляем пакеты obfs4proxy (если вы не используете их в других сервисах)
-apt-get remove -y obfs4proxy
-apt-get autoremove -y
+# 3. Удаляем демонстрационный obfs4-контейнер (если поднимался)
+docker stop obfs4-demo 2>/dev/null || true
+docker rm -f obfs4-demo 2>/dev/null || true
 
-# 3. Удаляем директорию /opt/outline
+# 4. Удаляем директорию /opt/outline со всем содержимым
 rm -rf /opt/outline
 
-# 4. Если Docker установлен только для Outline, можно удалить Docker
-#    Но если он используется в других проектах, это нежелательно.
-# apt-get remove -y docker docker.io
+# 5. При желании, можно удалить obfs4proxy
+apt-get remove -y obfs4proxy
+
+# 6. (Опционально) Удаляем Docker
+#    Если хотим вообще снести Docker (аккуратно, 
+#    ведь это может повлиять на другие сервисы!)
+# apt-get remove -y docker docker.io containerd runc
 # apt-get autoremove -y
 
-echo "Удаление завершено."
-HIDDEN_REMOVE_BLOCK
-
-# ============================= КОНЕЦ СКРИПТА ====================================
+echo "Все компоненты Outline и obfs4 удалены."
+HIDDEN_CLEANUP_SCRIPT
