@@ -1,0 +1,117 @@
+root@London:~# sudo bash -c "$(wget -qO- https://raw.githubusercontent.com/m1a7/outline-server2/refs/heads/main/req6.sh)"
+[INFO] Подготовка окружения. Скрипт запускается пользователем: 'root'.
+[INFO] Начало шага: 'Проверка наличия Docker'
+Docker не найден. Попытаюсь установить...
+# Executing docker install script, commit: 4c94a56999e10efcf48c5b8e3f6afea464f9108e
++ sh -c apt-get -qq update >/dev/null
++ sh -c DEBIAN_FRONTEND=noninteractive apt-get -y -qq install ca-certificates curl >/dev/null
++ sh -c install -m 0755 -d /etc/apt/keyrings
++ sh -c curl -fsSL "https://download.docker.com/linux/ubuntu/gpg" -o /etc/apt/keyrings/docker.asc
++ sh -c chmod a+r /etc/apt/keyrings/docker.asc
++ sh -c echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu jammy stable" > /etc/apt/sources.list.d/docker.list
++ sh -c apt-get -qq update >/dev/null
++ sh -c DEBIAN_FRONTEND=noninteractive apt-get -y -qq install docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-ce-rootless-extras docker-buildx-plugin >/dev/null
++ sh -c docker version
+
+Docker установлен успешно.
+[OK] Шаг 'Проверка наличия Docker' завершён успешно.
+[INFO] Начало шага: 'Проверка, что демон Docker запущен'
+Демон Docker уже запущен.
+[OK] Шаг 'Проверка, что демон Docker запущен' завершён успешно.
+[INFO] Начало шага: 'Определение внешнего IP адреса'
+Обнаружен IP: 167.99.200.87
+[OK] Шаг 'Определение внешнего IP адреса' завершён успешно.
+[OK] PUBLIC_HOSTNAME=167.99.200.87
+
+[INFO] Начало шага: 'Создание директории /opt/outline и каталога для стейта'
+[OK] Шаг 'Создание директории /opt/outline и каталога для стейта' завершён успешно.
+
+[INFO] Начало шага: 'Генерация секретного ключа'
+Секретный ключ: 1Ab5jNZdFf3yspVUfOr3Iw
+[OK] Шаг 'Генерация секретного ключа' завершён успешно.
+[OK] Секретный ключ (SB_API_PREFIX)=1Ab5jNZdFf3yspVUfOr3Iw
+[INFO] Начало шага: 'Генерация самоподписанного сертификата'
+Сертификат успешно сгенерирован.
+[OK] Шаг 'Генерация самоподписанного сертификата' завершён успешно.
+[INFO] Начало шага: 'Генерация SHA-256 отпечатка сертификата'
+Отпечаток SHA-256: 14AA83B608DAC5B4E7710AEEDA1603DE8695EF7034D30FD51FDDA43F5BD23417
+[OK] Шаг 'Генерация SHA-256 отпечатка сертификата' завершён успешно.
+[OK] SHA-256 отпечаток сертификата: 14AA83B608DAC5B4E7710AEEDA1603DE8695EF7034D30FD51FDDA43F5BD23417
+[INFO] Начало шага: 'Запись первичных конфигурационных данных'
+Конфигурационный файл создан: /opt/outline/persisted-state/shadowbox_server_config.json
+[OK] Шаг 'Запись первичных конфигурационных данных' завершён успешно.
+
+[INFO] Начало шага: 'Запуск Shadowbox (Outline) в Docker'
+Unable to find image 'quay.io/outline/shadowbox:stable' locally
+stable: Pulling from outline/shadowbox
+96526aa774ef: Pull complete 
+824de1d006d4: Pull complete 
+76c34934b331: Pull complete 
+fdef87f136ff: Pull complete 
+bfdca0914711: Pull complete 
+967f081654bc: Pull complete 
+c7df6b4bc54f: Pull complete 
+4f4fb700ef54: Pull complete 
+Digest: sha256:2221fb6f30c3d8549bdd80a75c92cfc1b01ad525f1bf0b33cda87c9b93b58495
+Status: Downloaded newer image for quay.io/outline/shadowbox:stable
+WARNING: Published ports are discarded when using host network mode
+6a6a7ec2594e2631b850ffbff49f5ad0a646805ff1559e1bc4f4d7482178aa2c
+
+[OK] Шаг 'Запуск Shadowbox (Outline) в Docker' завершён успешно.
+[INFO] Начало шага: 'Запуск Watchtower (обновляет образы Docker)'
+Unable to find image 'containrrr/watchtower:latest' locally
+latest: Pulling from containrrr/watchtower
+57241801ebfd: Pull complete 
+3d4f475b92a2: Pull complete 
+1f05004da6d7: Pull complete 
+Digest: sha256:6dd50763bbd632a83cb154d5451700530d1e44200b268a4e9488fefdfcf2b038
+Status: Downloaded newer image for containrrr/watchtower:latest
+b95a5f7fa7330695852a8dedbe051121fded17551478d8109048728d826662df
+
+[OK] Шаг 'Запуск Watchtower (обновляет образы Docker)' завершён успешно.
+[INFO] Начало шага: 'Ожидание, пока Outline-сервер станет доступен'
+Outline-сервер готов к работе.
+[OK] Шаг 'Ожидание, пока Outline-сервер станет доступен' завершён успешно.
+[INFO] Начало шага: 'Создание первого пользователя Outline'
+{"id":"0","name":"","password":"Tk7bV9rxLW5QyBCdC0QGZv","port":443,"method":"chacha20-ietf-poly1305","accessUrl":"ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpUazdiVjlyeExXNVF5QkNkQzBRR1p2@167.99.200.87:443/?outline=1"}Пользователь создан.
+[OK] Шаг 'Создание первого пользователя Outline' завершён успешно.
+
+[INFO] Начало шага: 'Добавление API URL в /opt/outline/access.txt'
+bash: line 3: : No such file or directory
+Добавлены строки apiUrl и certSha256 в 
+[OK] Шаг 'Добавление API URL в /opt/outline/access.txt' завершён успешно.
+
+[INFO] Начало шага: 'Проверка, что порт 443 доступен извне'
+Порт 443 кажется доступен снаружи.
+[OK] Шаг 'Проверка, что порт 443 доступен извне' завершён успешно.
+
+[INFO] Начало шага: 'Блокировка ICMP (ping) на сервере'
+ip6tables v1.8.7 (nf_tables): unknown option "--icmp-type"
+Try `ip6tables -h' or 'ip6tables --help' for more information.
+
+ICMP (ping) заблокирован. Это поможет скрыть VPN от обнаружения через bidirectional ping.
+[OK] Шаг 'Блокировка ICMP (ping) на сервере' завершён успешно.
+[INFO] Начало шага: 'Проверка, что порт 443 слушается'
+tcp   LISTEN 0      4096               *:443             *:*          
+Порт 443 прослушивается.
+[OK] Шаг 'Проверка, что порт 443 слушается' завершён успешно.
+[INFO] Начало шага: 'Команды для ручной проверки'
+------------------------------------------
+Можно вручную проверить доступность Outline:
+  curl --insecure https://167.99.200.87:8443/1Ab5jNZdFf3yspVUfOr3Iw/access-keys
+------------------------------------------
+[OK] Шаг 'Команды для ручной проверки' завершён успешно.
+
+========== ИТОГИ УСТАНОВКИ ==========
+VPN Outline (Docker) успешно настроен (если не было ошибок выше).
+PUBLIC_HOSTNAME: 167.99.200.87
+Outline API URL: https://167.99.200.87:8443/1Ab5jNZdFf3yspVUfOr3Iw
+TLS Certificate: /opt/outline/persisted-state/shadowbox-selfsigned.crt
+TLS Key:         /opt/outline/persisted-state/shadowbox-selfsigned.key
+SHA-256 Fingerprint: 14AA83B608DAC5B4E7710AEEDA1603DE8695EF7034D30FD51FDDA43F5BD23417
+------------------------------------------
+Содержимое /opt/outline/access.txt:
+certSha256:14AA83B608DAC5B4E7710AEEDA1603DE8695EF7034D30FD51FDDA43F5BD23417
+------------------------------------------
+Скрипт завершён.
+root@London:~# 
