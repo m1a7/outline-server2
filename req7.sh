@@ -340,7 +340,9 @@ echo -e "${COLOR_GREEN}Скрипт завершён.${COLOR_NONE}"
 
 # Utility function to print section separators
 print_separator() {
+    echo ""
     echo "------------------------------------------"
+    echo ""
 }
 
 # Function to handle errors and ensure file creation
@@ -351,7 +353,17 @@ ensure_file_exists() {
     fi
 }
 
-# Add separators for readability
+# Ensure the SHA-256 fingerprint is correctly calculated and set
+print_separator
+echo "[INFO] Генерация SHA-256 отпечатка сертификата"
+CERTIFICATE_FILE="/opt/outline/persisted-state/shadowbox-selfsigned.crt"
+if [ -f "$CERTIFICATE_FILE" ]; then
+    SHA256_FINGERPRINT=$(openssl x509 -noout -fingerprint -sha256 -inform pem -in "$CERTIFICATE_FILE" | sed 's/^.*=//;s/://g')
+    echo "Отпечаток SHA-256: $SHA256_FINGERPRINT"
+else
+    echo "[ERROR] Сертификат не найден по пути: $CERTIFICATE_FILE"
+    SHA256_FINGERPRINT="ERROR_NO_CERTIFICATE"
+fi
 print_separator
 
 # Example enhancement: Adding API URL and certSha256 to access.txt
@@ -365,8 +377,9 @@ ensure_file_exists "$ACCESS_FILE"
 } >> "$ACCESS_FILE"
 echo "Добавлены строки apiUrl и certSha256 в $ACCESS_FILE"
 echo "[OK] Шаг 'Добавление API URL в $ACCESS_FILE' завершён успешно."
+print_separator
 
-# Final section: Print installation summary
+# Installation summary with separators
 print_separator
 echo "========== ИТОГИ УСТАНОВКИ =========="
 echo "VPN Outline (Docker) успешно настроен (если не было ошибок выше)."
@@ -375,12 +388,13 @@ echo "Outline API URL: https://$PUBLIC_HOSTNAME:443/$SB_API_PREFIX"
 echo "TLS Certificate: /opt/outline/persisted-state/shadowbox-selfsigned.crt"
 echo "TLS Key:         /opt/outline/persisted-state/shadowbox-selfsigned.key"
 echo "SHA-256 Fingerprint: $SHA256_FINGERPRINT"
+print_separator
 
 CONFIG_STRING="{\"apiUrl\":\"https://$PUBLIC_HOSTNAME:443/$SB_API_PREFIX\",\"certSha256\":\"$SHA256_FINGERPRINT\"}"
 echo "Config string for OutlineManager: $CONFIG_STRING"
-
-# Commands for opening key configuration files
 print_separator
+
+# Commands for accessing key configuration files
 echo "Commands to view key configuration files:"
 echo "cat /opt/outline/access.txt"
 echo "cat /opt/outline/persisted-state/shadowbox_server_config.json"
